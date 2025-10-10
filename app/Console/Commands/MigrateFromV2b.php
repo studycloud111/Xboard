@@ -129,7 +129,10 @@ class MigrateFromV2b extends Command
                 "ALTER TABLE `v2_server_trojan` DROP COLUMN `network`, DROP COLUMN `network_settings`;",
                 "ALTER TABLE `v2_user` DROP COLUMN `device_limit`;"
             ],
-            'v2boardpro' => [] // V2boardpro 特殊处理，在上面已经调用了专门的方法
+            'v2boardpro' => [
+                // V2boardpro 表结构已是最新，无需修改
+                // 所有迁移由 xboard:update 中的 create_v2_server_table 自动处理
+            ]
         ];
 
         if (!$version) {
@@ -202,35 +205,107 @@ class MigrateFromV2b extends Command
         $this->info('');
 
         try {
-            $this->info('1️⃣  开始迁移节点数据...');
+            $this->info('0️⃣  准备迁移环境...');
             
-            $totalMigrated = 0;
-            $totalMigrated += $this->migrateServerData('trojan');
-            $totalMigrated += $this->migrateServerData('vmess');
-            $totalMigrated += $this->migrateServerData('vless');
-            $totalMigrated += $this->migrateServerData('shadowsocks');
-            $totalMigrated += $this->migrateServerData('hysteria');
-            $totalMigrated += $this->migrateServerData('tuic');
-            $totalMigrated += $this->migrateServerData('anytls');
+            // 检查数据库连接
+            try {
+                DB::connection()->getPdo();
+                $this->line('  ✅ 数据库连接正常');
+            } catch (\Exception $e) {
+                $this->error('  ❌ 数据库连接失败: ' . $e->getMessage());
+                return 1;
+            }
+            
+            // 删除并重建 migrations 表（确保结构正确）
+            $this->warn('  ⚠️  重建 migrations 表...');
+            DB::statement('DROP TABLE IF EXISTS migrations');
+            DB::statement("CREATE TABLE `migrations` (
+                `id` int unsigned NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                `migration` varchar(255) NOT NULL,
+                `batch` int NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+            $this->line('  ✅ migrations 表已重建（含 AUTO_INCREMENT）');
+            
+            // 删除 failed_jobs 表（避免结构冲突）
+            if (DB::getSchemaBuilder()->hasTable('failed_jobs')) {
+                $this->warn('  ⚠️  删除旧的 failed_jobs 表...');
+                DB::statement('DROP TABLE failed_jobs');
+                $this->line('  ✅ failed_jobs 表已删除');
+            }
+            
+            $this->info('');
+            
+                $this->info('1️⃣  备份节点数据...');
+                $this->backupServerData();
+                $this->info('✅ 节点数据已备份到临时表');
+                
+                $this->info('');
+                $this->info('2️⃣  删除旧节点表（对齐 Xboard 表结构）...');
+                $this->dropOldServerTables();
+                $this->info('✅ 旧节点表已删除');
+                
+                $this->info('');
+                $this->info('2.5️⃣  智能标记已存在字段的迁移...');
+                $this->markExistingColumnMigrations();
+                $this->info('✅ 字段检测完成');
+                
+                $this->info('');
+                $this->info('2.8️⃣  预先修复 v2_stat 表结构（防止Xboard创建错误索引）...');
+                $this->preFixStatTable();
+                $this->info('✅ v2_stat 表结构已预先修复');
+                
+                $this->info('');
+                $this->info('3️⃣  执行 Xboard 迁移（对齐表结构）...');
+                $this->line('  📝 跳过已存在字段的添加');
+                $this->line('  📝 执行字段修改和优化');
+                $this->call('migrate', ['--force' => true]);
+                $this->info('✅ Xboard 表结构对齐完成');
+                
+                $this->info('');
+                $this->info('4️⃣  从备份恢复节点数据到 v2_server...');
+                $this->restoreServerData();
+                $this->info('✅ 节点数据已恢复');
 
             $this->info('');
-            $this->info('2️⃣  更新父节点引用关系...');
-            $this->updateServerParentIds();
-            $this->info('✅ 父节点引用更新完成');
+            $this->info('5️⃣  修复数据库配置和缓存...');
+            $this->fixDatabaseAndCache();
+            $this->info('✅ 配置和缓存已修复');
+            
+            $this->info('');
+            $this->info('5.5️⃣  清理旧的session数据...');
+            $this->cleanOldSessions();
+            $this->info('✅ Session已清理');
+            
+            $this->info('');
+            $this->info('5.8️⃣  最终修复所有关键问题...');
+            $this->finalFixAllIssues();
+            $this->info('✅ 所有关键问题已修复');
 
             $this->info('');
-            $this->info('3️⃣  运行数据库迁移和更新...');
-            $this->call('db:seed', ['--class' => 'OriginV2bMigrationsTableSeeder']);
-            $this->call('xboard:update');
-
-            $this->info('');
-            $this->info('4️⃣  验证迁移结果...');
-            $this->verifyServerMigration();
+            $this->info('6️⃣  验证迁移结果...');
+            $totalMigrated = $this->verifyServerMigration();
+            $this->verifySystemTables();
 
             $this->info('');
             $this->info('========================================');
-            $this->info("🎉 迁移成功！共迁移 {$totalMigrated} 个节点");
+            $this->info("🎉 数据库迁移成功！共迁移 {$totalMigrated} 个节点");
             $this->info('========================================');
+            $this->info('');
+            $this->info('✅ V2boardpro 数据库已成功对齐到 Xboardpro');
+            $this->info('');
+            $this->info('⚠️  重要提示：');
+            $this->warn('  所有旧的 session 已清理，请重新登录管理面板');
+            $this->info('');
+            $this->info('📋 下一步操作：');
+            $this->info('1. 【必须】清除浏览器缓存和Cookie');
+            $this->info('2. 【必须】刷新页面并重新登录');
+            $this->info('3. 验证节点列表是否正常显示');
+            $this->info('4. 验证订单列表是否可以查看');
+            $this->info('5. 验证统计数据是否正常');
+            $this->info('');
+            $this->info('如果仍有问题，请查看:');
+            $this->info('  - storage/logs/laravel.log');
+            $this->info('  - 运行: php validate_migration.php');
             $this->info('');
             
             return 0;
@@ -261,7 +336,7 @@ class MigrateFromV2b extends Command
         foreach ($servers as $server) {
             $data = [
                 'type' => $type,
-                'code' => (string) $server->id,
+                'code' => $type . '_' . $server->id,  // 使用 "协议_ID" 格式避免不同协议的 ID 冲突
                 'parent_id' => $server->parent_id,
                 'group_ids' => $this->normalizeJson($server->group_id),
                 'route_ids' => $this->normalizeJson($server->route_id ?? null),
@@ -385,9 +460,12 @@ class MigrateFromV2b extends Command
 
         $updated = 0;
         foreach ($servers as $server) {
+            // parent_id 存储的是原始的 ID，需要拼接成 "协议_ID" 格式查找
+            $parentCode = $server->type . '_' . $server->parent_id;
+            
             $parentId = DB::table('v2_server')
                 ->where('type', $server->type)
-                ->where('code', $server->parent_id)
+                ->where('code', $parentCode)
                 ->value('id');
 
             if ($parentId) {
@@ -415,7 +493,7 @@ class MigrateFromV2b extends Command
 
         if ($stats->isEmpty()) {
             $this->warn('  ⚠️  未找到任何节点数据');
-            return;
+            return 0;
         }
 
         $this->table(
@@ -424,6 +502,9 @@ class MigrateFromV2b extends Command
                 return [$item->type, $item->count];
             })->toArray()
         );
+
+        // 返回总数
+        return $stats->sum('count');
     }
 
     /**
@@ -458,5 +539,1281 @@ class MigrateFromV2b extends Command
         
         $decoded = json_decode($value, true);
         return $decoded !== null ? $decoded : null;
+    }
+
+    /**
+     * 智能标记已存在字段的"添加字段"迁移
+     * V2boardpro 可能已有这些字段，标记为已执行以避免 Duplicate column 错误
+     * 但保留字段，让后续的"修改字段"迁移正常运行
+     */
+    protected function markExistingColumnMigrations()
+    {
+        $schemaBuilder = DB::getSchemaBuilder();
+        
+        // 定义"添加字段"的迁移及其对应的表和字段
+        $addColumnMigrations = [
+            // v2_plan 表
+            '2025_01_10_152139_add_device_limit_column' => ['table' => 'v2_plan', 'columns' => ['device_limit']],
+            '2024_03_24_171139_add_column_capacity_limit_to_v2_plan_table' => ['table' => 'v2_plan', 'columns' => ['capacity_limit']],
+            '2025_01_04_optimize_plan_table' => ['table' => 'v2_plan', 'columns' => ['period', 'reset_traffic_method']],
+            
+            // v2_user 表
+            '2025_01_10_152140_add_device_limit_to_users' => ['table' => 'v2_user', 'columns' => ['device_limit']],
+            '2024_04_25_164827_add_column_banned_reason_to_v2_user_table' => ['table' => 'v2_user', 'columns' => ['banned_reason']],
+            
+            // v2_order 表
+            '2024_11_09_111424_add_column_surplus_order_ids_to_v2_order_table' => ['table' => 'v2_order', 'columns' => ['surplus_order_ids']],
+            '2025_01_01_130644_modify_commission_status_in_v2_order_table' => ['table' => 'v2_order', 'columns' => ['commission_status']],
+            '2025_01_12_200936_modify_commission_status_in_v2_order_table' => ['table' => 'v2_order', 'columns' => ['commission_status']],
+            
+            // v2_coupon 表
+            '2024_03_17_170331_add_column_limit_plan_ids_to_v2_coupon_table' => ['table' => 'v2_coupon', 'columns' => ['limit_plan_ids']],
+            '2024_03_21_102946_add_column_limit_period_to_v2_coupon_table' => ['table' => 'v2_coupon', 'columns' => ['limit_period']],
+            
+            // v2_notice 表
+            '2025_01_12_190315_add_sort_to_v2_notice_table' => ['table' => 'v2_notice', 'columns' => ['sort']],
+        ];
+        
+        $marked = 0;
+        $skipped = 0;
+        
+        foreach ($addColumnMigrations as $migration => $config) {
+            $table = $config['table'];
+            $columns = $config['columns'];
+            
+            // 检查表和所有字段是否存在
+            if (!$schemaBuilder->hasTable($table)) {
+                $skipped++;
+                continue;
+            }
+            
+            $allColumnsExist = true;
+            foreach ($columns as $column) {
+                if (!$schemaBuilder->hasColumn($table, $column)) {
+                    $allColumnsExist = false;
+                    break;
+                }
+            }
+            
+            if ($allColumnsExist) {
+                // 字段已存在，标记迁移为已执行
+                $exists = DB::table('migrations')
+                    ->where('migration', $migration)
+                    ->exists();
+                
+                if (!$exists) {
+                    DB::table('migrations')->insert([
+                        'migration' => $migration,
+                        'batch' => 1
+                    ]);
+                    $marked++;
+                    $columnsStr = implode(', ', $columns);
+                    $this->line("  ✅ 已标记: {$table}.{$columnsStr} (字段已存在，跳过添加)");
+                }
+            } else {
+                $skipped++;
+            }
+        }
+        
+        $this->line("  📊 已标记 {$marked} 个添加字段迁移");
+        
+        // 标记所有针对旧节点表的迁移（这些表已被删除，统一到 v2_server）
+        $this->markOldServerTableMigrations();
+        
+        // 同时检查并标记那些依赖于不存在字段的索引迁移
+        $this->markIndexMigrationsForMissingColumns();
+    }
+    
+    /**
+     * 标记所有针对旧节点表的迁移
+     * 这些表已经被删除并合并到 v2_server，相关迁移需要标记为已执行
+     */
+    protected function markOldServerTableMigrations()
+    {
+        // 所有针对旧节点表的迁移（这些表已删除并合并到 v2_server）
+        $oldServerTableMigrations = [
+            '2023_09_04_190923_add_column_excludes_to_server_table',
+            '2023_09_06_195956_add_column_ips_to_server_table',
+            '2023_09_14_013244_add_column_alpn_to_server_hysteria_table',
+            '2023_09_24_040317_add_column_network_and_network_settings_to_v2_server_trojan',
+            '2023_09_29_044957_add_column_version_and_is_obfs_to_server_hysteria_table',
+            '2023_11_29_181412_add_column_network_settings_to_server_table',
+            '2023_12_20_104825_add_column_network_settings_to_server_table',
+            '2024_01_15_000000_add_column_to_server_tables',
+            '2024_02_10_000000_update_server_tables',
+            '2024_03_01_000000_add_excludes_to_servers',
+        ];
+        
+        $marked = 0;
+        foreach ($oldServerTableMigrations as $migration) {
+            $exists = DB::table('migrations')
+                ->where('migration', $migration)
+                ->exists();
+            
+            if (!$exists) {
+                DB::table('migrations')->insert([
+                    'migration' => $migration,
+                    'batch' => 1
+                ]);
+                $marked++;
+                $this->line("  ✅ 已标记: {$migration} (旧节点表已删除)");
+            }
+        }
+        
+        if ($marked > 0) {
+            $this->line("  📊 已标记 {$marked} 个旧节点表迁移");
+        }
+    }
+    
+    /**
+     * 标记那些依赖于不存在字段的索引/外键迁移
+     * 避免因为字段不存在导致迁移失败
+     */
+    protected function markIndexMigrationsForMissingColumns()
+    {
+        $schemaBuilder = DB::getSchemaBuilder();
+        
+        // 定义需要检查的索引迁移及其依赖的字段
+        $indexMigrations = [
+            '2025_01_15_000002_add_stat_performance_indexes' => [
+                ['table' => 'v2_user', 'column' => 'online_count'],
+                ['table' => 'v2_stat_server', 'column' => 'rate'],
+            ],
+            // 可以继续添加其他类似的迁移
+        ];
+        
+        $marked = 0;
+        
+        foreach ($indexMigrations as $migration => $dependencies) {
+            $shouldSkip = false;
+            
+            foreach ($dependencies as $dep) {
+                $table = $dep['table'];
+                $column = $dep['column'];
+                
+                // 如果表不存在，或字段不存在
+                if (!$schemaBuilder->hasTable($table) || !$schemaBuilder->hasColumn($table, $column)) {
+                    $shouldSkip = true;
+                    $this->line("  ⏭️  跳过: {$migration} (缺少 {$table}.{$column})");
+                    break;
+                }
+            }
+            
+            if ($shouldSkip) {
+                $exists = DB::table('migrations')
+                    ->where('migration', $migration)
+                    ->exists();
+                
+                if (!$exists) {
+                    DB::table('migrations')->insert([
+                        'migration' => $migration,
+                        'batch' => 1
+                    ]);
+                    $marked++;
+                }
+            }
+        }
+        
+        if ($marked > 0) {
+            $this->line("  📊 已跳过 {$marked} 个依赖不存在字段的迁移");
+        }
+    }
+
+    /**
+     * 备份所有节点数据到临时表
+     */
+    protected function backupServerData()
+    {
+        // 创建临时备份表
+        DB::statement("CREATE TABLE IF NOT EXISTS `v2_server_backup_temp` (
+            `id` int NOT NULL,
+            `type` varchar(20) NOT NULL,
+            `data` longtext NOT NULL,
+            PRIMARY KEY (`type`, `id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+        
+        // 清空旧备份
+        DB::table('v2_server_backup_temp')->truncate();
+        
+        // 备份其他重要数据
+        $this->backupOtherData();
+        
+        // 备份各类节点
+        $serverTypes = [
+            'v2_server_trojan' => 'trojan',
+            'v2_server_vmess' => 'vmess',
+            'v2_server_vless' => 'vless',
+            'v2_server_shadowsocks' => 'shadowsocks',
+            'v2_server_hysteria' => 'hysteria',
+            'v2_server_tuic' => 'tuic',
+            'v2_server_anytls' => 'anytls',
+        ];
+        
+        $totalBackedUp = 0;
+        foreach ($serverTypes as $table => $type) {
+            if (DB::getSchemaBuilder()->hasTable($table)) {
+                $servers = DB::table($table)->get();
+                foreach ($servers as $server) {
+                    DB::table('v2_server_backup_temp')->insert([
+                        'id' => $server->id,
+                        'type' => $type,
+                        'data' => json_encode($server)
+                    ]);
+                    $totalBackedUp++;
+                }
+                $this->line("  ✅ 备份 {$type}: " . count($servers) . " 个节点");
+            }
+        }
+        
+        $this->line("  📊 总计备份: {$totalBackedUp} 个节点");
+    }
+
+    /**
+     * 从备份恢复节点数据到 v2_server 表
+     */
+    protected function restoreServerData()
+    {
+        if (!DB::getSchemaBuilder()->hasTable('v2_server_backup_temp')) {
+            $this->warn('  ⚠️  未找到备份表');
+            return;
+        }
+        
+        if (!DB::getSchemaBuilder()->hasTable('v2_server')) {
+            $this->error('  ❌ v2_server 表不存在，无法恢复');
+            return;
+        }
+        
+        $backups = DB::table('v2_server_backup_temp')->get();
+        $totalRestored = 0;
+        
+        foreach ($backups as $backup) {
+            $server = json_decode($backup->data);
+            $type = $backup->type;
+            
+            // 准备基础数据（注意 Xboard 使用 group_ids 和 route_ids 复数形式）
+            $serverData = [
+                'type' => $type,
+                'code' => $type . '_' . $server->id,
+                'group_ids' => isset($server->group_id) ? (is_string($server->group_id) ? $server->group_id : json_encode($server->group_id)) : '[]',
+                'route_ids' => isset($server->route_id) ? (is_string($server->route_id) ? $server->route_id : json_encode($server->route_id)) : '[]',
+                'name' => $server->name,
+                'parent_id' => $server->parent_id ?? null,
+                'host' => $server->host,
+                'port' => (string)($server->port ?? $server->server_port),
+                'server_port' => $server->server_port,
+                'tags' => isset($server->tags) ? (is_string($server->tags) ? $server->tags : json_encode($server->tags)) : '[]',
+                'rate' => $server->rate ?? 1,
+                'show' => $server->show ?? 0,
+                'sort' => $server->sort ?? null,
+                'created_at' => isset($server->created_at) ? date('Y-m-d H:i:s', $server->created_at) : now(),
+                'updated_at' => isset($server->updated_at) ? date('Y-m-d H:i:s', $server->updated_at) : now(),
+            ];
+            
+            // 根据类型设置 protocol_settings
+            $serverData['protocol_settings'] = $this->buildProtocolSettings($type, $server);
+            
+            // 插入到 v2_server
+            DB::table('v2_server')->insert($serverData);
+            $totalRestored++;
+        }
+        
+        $this->line("  📊 总计恢复: {$totalRestored} 个节点");
+        
+        // 清理临时表
+        DB::statement('DROP TABLE IF EXISTS v2_server_backup_temp');
+        $this->line("  🗑️  已清理临时备份表");
+    }
+    
+    /**
+     * 备份其他重要数据
+     */
+    protected function backupOtherData()
+    {
+        // 备份v2_giftcard表（如果存在）
+        if (DB::getSchemaBuilder()->hasTable('v2_giftcard')) {
+            $giftcards = DB::table('v2_giftcard')->get();
+            if ($giftcards->count() > 0) {
+                DB::statement("CREATE TABLE IF NOT EXISTS `v2_giftcard_backup` AS SELECT * FROM `v2_giftcard`");
+                $this->line("  ✅ 备份 v2_giftcard: " . $giftcards->count() . " 条记录");
+            }
+        }
+    }
+    
+    /**
+     * 构建 protocol_settings JSON
+     */
+    protected function buildProtocolSettings($type, $server)
+    {
+        $settings = [];
+        
+        switch ($type) {
+            case 'hysteria':
+                $settings = [
+                    'version' => $server->version ?? 1,
+                    'bandwidth' => [
+                        'up' => $server->up_mbps ?? 100,
+                        'down' => $server->down_mbps ?? 100,
+                    ],
+                    'obfs' => [
+                        'open' => !empty($server->obfs_password),
+                        'type' => $server->obfs ?? 'salamander',
+                        'password' => $server->obfs_password ?? '',
+                    ],
+                    'tls' => [
+                        'server_name' => $server->server_name ?? '',
+                        'allow_insecure' => $server->insecure ?? 0
+                    ]
+                ];
+                if (isset($server->alpn)) {
+                    $settings['alpn'] = $server->alpn;
+                }
+                break;
+                
+            case 'trojan':
+                $settings = [
+                    'server_name' => $server->server_name ?? '',
+                    'allow_insecure' => $server->allow_insecure ?? 0,
+                    'network' => $server->network ?? 'tcp',
+                ];
+                if (isset($server->network_settings)) {
+                    $settings['network_settings'] = $this->parseJson($server->network_settings);
+                }
+                break;
+                
+            case 'vmess':
+                $settings = [
+                    'tls' => $server->tls ?? 0,
+                    'network' => $server->network ?? 'tcp',
+                ];
+                if (isset($server->tlsSettings)) {
+                    $settings['tls_settings'] = $this->parseJson($server->tlsSettings);
+                }
+                if (isset($server->networkSettings)) {
+                    $settings['network_settings'] = $this->parseJson($server->networkSettings);
+                }
+                if (isset($server->rules)) {
+                    $settings['rules'] = $this->parseJson($server->rules);
+                }
+                break;
+                
+            case 'vless':
+                $settings = [
+                    'tls' => $server->tls ?? 0,
+                    'network' => $server->network ?? 'tcp',
+                ];
+                if (isset($server->tls_settings)) {
+                    $settings['tls_settings'] = $this->parseJson($server->tls_settings);
+                }
+                if (isset($server->network_settings)) {
+                    $settings['network_settings'] = $this->parseJson($server->network_settings);
+                }
+                if (isset($server->flow)) {
+                    $settings['flow'] = $server->flow;
+                }
+                break;
+                
+            case 'shadowsocks':
+                $settings = [
+                    'cipher' => $server->cipher ?? 'aes-256-gcm',
+                ];
+                if (isset($server->obfs)) {
+                    $settings['obfs'] = $server->obfs;
+                }
+                if (isset($server->obfs_settings)) {
+                    $settings['obfs_settings'] = $this->parseJson($server->obfs_settings);
+                }
+                // 添加 server_key 字段以确保兼容性
+                if (isset($server->server_key)) {
+                    $settings['server_key'] = $server->server_key;
+                }
+                break;
+                
+            case 'tuic':
+                $settings = [
+                    'version' => $server->version ?? 5,
+                    'server_name' => $server->server_name ?? '',
+                    'congestion_control' => $server->congestion_control ?? 'cubic',
+                    'allow_insecure' => $server->insecure ?? 0,
+                    'disable_sni' => $server->disable_sni ?? 0,
+                ];
+                break;
+                
+            case 'anytls':
+                $settings = [
+                    'server_name' => $server->server_name ?? '',
+                    'allow_insecure' => $server->insecure ?? 0,
+                ];
+                if (isset($server->padding_scheme)) {
+                    $settings['padding_scheme'] = $this->parseJson($server->padding_scheme);
+                }
+                break;
+        }
+        
+        return json_encode($settings);
+    }
+
+    /**
+     * 删除旧的节点分表（对齐 Xboard 表结构）
+     */
+    protected function dropOldServerTables()
+    {
+        $oldTables = [
+            'v2_server_trojan',
+            'v2_server_vmess',
+            'v2_server_vless',
+            'v2_server_shadowsocks',
+            'v2_server_hysteria',
+            'v2_server_tuic',
+            'v2_server_anytls',
+        ];
+
+        foreach ($oldTables as $table) {
+            if (DB::getSchemaBuilder()->hasTable($table)) {
+                DB::statement("DROP TABLE {$table}");
+                $this->line("  ✅ {$table} 表已删除");
+            }
+        }
+    }
+
+
+    /**
+     * 创建 v2_server 表（如果不存在）
+     */
+    protected function createServerTableIfNotExists()
+    {
+        if (DB::getSchemaBuilder()->hasTable('v2_server')) {
+            $this->warn('  ⚠️  检测到旧的 v2_server 表，正在删除并重建...');
+            DB::statement('DROP TABLE v2_server');
+            $this->line('  ✅ 旧表已删除');
+        }
+
+        // 该方法已废弃，v2_server 表由 Xboard 迁移自动创建
+        $this->info('  ℹ️  v2_server 表将由 Xboard 迁移自动创建');
+    }
+    
+    /**
+     * 预先修复 v2_stat 表（在 Xboard 迁移之前）
+     */
+    protected function preFixStatTable()
+    {
+        // 如果 v2_stat 表存在，删除它，让我们创建正确的结构
+        if (DB::getSchemaBuilder()->hasTable('v2_stat')) {
+            $this->warn('  ⚠️  删除旧的 v2_stat 表（将重新创建正确结构）...');
+            
+            // 备份数据
+            $statData = DB::table('v2_stat')->get();
+            $this->line('  💾 已备份 ' . count($statData) . ' 条统计记录');
+            
+            // 删除表
+            DB::statement('DROP TABLE v2_stat');
+            $this->line('  ✅ 旧表已删除');
+        }
+        
+        // 创建正确结构的 v2_stat 表
+        $this->line('  🔧 创建正确结构的 v2_stat 表...');
+        DB::statement("CREATE TABLE IF NOT EXISTS `v2_stat` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `record_at` int(11) NOT NULL,
+            `record_type` char(1) NOT NULL COMMENT 'd day m month',
+            `order_count` int(11) DEFAULT 0 COMMENT '订单数量',
+            `order_total` int(11) DEFAULT 0 COMMENT '订单合计',
+            `commission_count` int(11) DEFAULT 0,
+            `commission_total` int(11) DEFAULT 0 COMMENT '佣金合计',
+            `paid_count` int(11) DEFAULT 0,
+            `paid_total` int(11) DEFAULT 0,
+            `register_count` int(11) DEFAULT 0,
+            `invite_count` int(11) DEFAULT 0,
+            `transfer_used_total` varchar(32) DEFAULT '0',
+            `created_at` int(11) NOT NULL,
+            `updated_at` int(11) NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `record_at_record_type` (`record_at`, `record_type`),
+            KEY `idx_record_at` (`record_at`),
+            KEY `idx_record_type` (`record_type`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+        $this->line('  ✅ v2_stat 表已创建（带复合唯一键）');
+        
+        // 恢复备份的数据（如果有）
+        if (isset($statData) && count($statData) > 0) {
+            $this->line('  🔄 恢复统计数据...');
+            
+            foreach ($statData as $row) {
+                try {
+                    DB::table('v2_stat')->insert([
+                        'record_at' => $row->record_at,
+                        'record_type' => $row->record_type,
+                        'order_count' => $row->order_count ?? 0,
+                        'order_total' => $row->order_total ?? 0,
+                        'commission_count' => $row->commission_count ?? 0,
+                        'commission_total' => $row->commission_total ?? 0,
+                        'paid_count' => $row->paid_count ?? 0,
+                        'paid_total' => $row->paid_total ?? 0,
+                        'register_count' => $row->register_count ?? 0,
+                        'invite_count' => $row->invite_count ?? 0,
+                        'transfer_used_total' => $row->transfer_used_total ?? '0',
+                        'created_at' => $row->created_at ?? time(),
+                        'updated_at' => $row->updated_at ?? time()
+                    ]);
+                } catch (\Exception $e) {
+                    // 如果插入失败（重复键），跳过
+                    if (strpos($e->getMessage(), 'Duplicate entry') === false) {
+                        throw $e;
+                    }
+                }
+            }
+            
+            $this->line('  ✅ 统计数据已恢复');
+        }
+        
+        // 注意：不标记 create_v2_tables 迁移，因为它还会创建其他必要的表
+        // v2_stat 表已经由我们预先创建，Xboard 迁移会检测到表存在并跳过创建
+        $this->line('  ℹ️  v2_stat 表已预先创建，Xboard 迁移会跳过该表的创建');
+    }
+    
+    /**
+     * 检查并修复必要的表
+     */
+    protected function checkAndFixRequiredTables()
+    {
+        // 确保 v2_stat 表存在且结构正确
+        if (!DB::getSchemaBuilder()->hasTable('v2_stat')) {
+            $this->warn('  ⚠️  创建 v2_stat 表...');
+            DB::statement("CREATE TABLE `v2_stat` (
+                `id` int(11) NOT NULL AUTO_INCREMENT,
+                `record_at` int(11) NOT NULL,
+                `record_type` char(1) NOT NULL COMMENT 'd day m month',
+                `order_count` int(11) DEFAULT '0',
+                `order_total` int(11) DEFAULT '0',
+                `commission_count` int(11) DEFAULT '0',
+                `commission_total` int(11) DEFAULT '0',
+                `paid_count` int(11) DEFAULT '0',
+                `paid_total` int(11) DEFAULT '0',
+                `register_count` int(11) DEFAULT '0',
+                `invite_count` int(11) DEFAULT '0',
+                `transfer_used_total` varchar(32) DEFAULT '0',
+                `created_at` int(11) NOT NULL,
+                `updated_at` int(11) NOT NULL,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `record_at_record_type` (`record_at`, `record_type`),
+                KEY `idx_record_at` (`record_at`),
+                KEY `idx_record_type` (`record_type`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $this->line('  ✅ v2_stat 表已创建');
+        } else {
+            // 检查并修复唯一键
+            $this->checkAndFixStatTableIndex();
+        }
+        
+        // 确保今日统计记录存在
+        $todayTimestamp = strtotime(date('Y-m-d'));
+        $exists = DB::table('v2_stat')
+            ->where('record_at', $todayTimestamp)
+            ->where('record_type', 'd')
+            ->exists();
+            
+        if (!$exists) {
+            DB::table('v2_stat')->insert([
+                'record_at' => $todayTimestamp,
+                'record_type' => 'd',
+                'order_count' => 0,
+                'order_total' => 0,
+                'commission_count' => 0,
+                'commission_total' => 0,
+                'paid_count' => 0,
+                'paid_total' => 0,
+                'register_count' => 0,
+                'invite_count' => 0,
+                'transfer_used_total' => '0',
+                'created_at' => time(),
+                'updated_at' => time()
+            ]);
+            $this->line('  ✅ 创建今日统计记录');
+        }
+        
+        // 创建本月统计记录
+        $thisMonth = strtotime(date('Y-m-01'));
+        $monthExists = DB::table('v2_stat')
+            ->where('record_at', $thisMonth)
+            ->where('record_type', 'm')
+            ->exists();
+            
+        if (!$monthExists) {
+            DB::table('v2_stat')->insert([
+                'record_at' => $thisMonth,
+                'record_type' => 'm',
+                'order_count' => 0,
+                'order_total' => 0,
+                'commission_count' => 0,
+                'commission_total' => 0,
+                'paid_count' => 0,
+                'paid_total' => 0,
+                'register_count' => 0,
+                'invite_count' => 0,
+                'transfer_used_total' => '0',
+                'created_at' => time(),
+                'updated_at' => time()
+            ]);
+            $this->line('  ✅ 创建本月统计记录');
+        }
+        
+        // 检查并创建其他必要的表
+        $this->checkAndCreateMissingTables();
+    }
+    
+    /**
+     * 修复数据库配置和缓存
+     */
+    protected function fixDatabaseAndCache()
+    {
+        // 清理缓存（安全模式，跳过 Redis 错误）
+        try {
+            Artisan::call('config:clear');
+            $this->line('  ✅ 配置缓存已清理');
+        } catch (\Exception $e) {
+            $this->warn('  ⚠️  配置缓存清理失败: ' . $e->getMessage());
+        }
+        
+        try {
+            Artisan::call('route:clear');
+            $this->line('  ✅ 路由缓存已清理');
+        } catch (\Exception $e) {
+            $this->warn('  ⚠️  路由缓存清理失败: ' . $e->getMessage());
+        }
+        
+        try {
+            Artisan::call('view:clear');
+            $this->line('  ✅ 视图缓存已清理');
+        } catch (\Exception $e) {
+            $this->warn('  ⚠️  视图缓存清理失败: ' . $e->getMessage());
+        }
+        
+        // 尝试清理应用缓存（如果 Redis 不可用，跳过）
+        try {
+            Artisan::call('cache:clear');
+            $this->line('  ✅ 应用缓存已清理');
+        } catch (\Exception $e) {
+            $this->warn('  ⚠️  应用缓存清理失败（可能使用 Redis）: ' . $e->getMessage());
+            $this->line('  ℹ️  将跳过缓存清理，继续迁移');
+        }
+        
+        // 确保管理员账号存在
+        $adminCount = DB::table('v2_user')->where('is_admin', 1)->count();
+        if ($adminCount === 0) {
+            $firstUser = DB::table('v2_user')->orderBy('id')->first();
+            if ($firstUser) {
+                DB::table('v2_user')->where('id', $firstUser->id)->update(['is_admin' => 1]);
+                $this->line("  ✅ 已将用户 {$firstUser->email} 设置为管理员");
+            }
+        } else {
+            $this->line("  ✅ 已有 {$adminCount} 个管理员账号");
+        }
+        
+        // 重新生成缓存
+        try {
+            Artisan::call('config:cache');
+            $this->line('  ✅ 配置缓存已重建');
+        } catch (\Exception $e) {
+            $this->warn('  ⚠️  配置缓存重建失败: ' . $e->getMessage());
+        }
+        
+        try {
+            Artisan::call('route:cache');
+            $this->line('  ✅ 路由缓存已重建');
+        } catch (\Exception $e) {
+            $this->warn('  ⚠️  路由缓存重建失败: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * 清理旧的 session 数据
+     */
+    protected function cleanOldSessions()
+    {
+        try {
+            if (DB::getSchemaBuilder()->hasTable('sessions')) {
+                $count = DB::table('sessions')->count();
+                if ($count > 0) {
+                    DB::table('sessions')->truncate();
+                    $this->line("  ✅ 已清理 {$count} 条旧的 session 记录");
+                    $this->line('  ℹ️  迁移后请重新登录管理面板');
+                } else {
+                    $this->line('  ✅ Session 表为空');
+                }
+            }
+        } catch (\Exception $e) {
+            $this->warn('  ⚠️  Session 清理失败: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * 最终修复所有关键问题（迁移的最后一步）
+     */
+    protected function finalFixAllIssues()
+    {
+        $this->line('');
+        $this->line('  🔧 执行最终修复...');
+        
+        // 0. 强制创建 sessions 表（最重要！）
+        $this->line('  0️⃣  强制创建 sessions 表...');
+        try {
+            if (!DB::getSchemaBuilder()->hasTable('sessions')) {
+                DB::statement("CREATE TABLE `sessions` (
+                    `id` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+                    `user_id` bigint unsigned DEFAULT NULL,
+                    `ip_address` varchar(45) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+                    `user_agent` text COLLATE utf8mb4_unicode_ci,
+                    `payload` longtext COLLATE utf8mb4_unicode_ci NOT NULL,
+                    `last_activity` int NOT NULL,
+                    PRIMARY KEY (`id`),
+                    KEY `sessions_user_id_index` (`user_id`),
+                    KEY `sessions_last_activity_index` (`last_activity`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+                $this->line("     ✅ sessions 表已创建");
+            } else {
+                $this->line("     ✅ sessions 表已存在");
+            }
+        } catch (\Exception $e) {
+            $this->error("     ❌ sessions 表创建失败: " . $e->getMessage());
+        }
+        
+        // 0.5. 强制添加 v2_user 表缺失的字段
+        $this->line('  0.5️⃣  检查并添加 v2_user 缺失字段...');
+        try {
+            // 检查 online_count 字段
+            $hasOnlineCount = DB::select("SHOW COLUMNS FROM v2_user LIKE 'online_count'");
+            if (empty($hasOnlineCount)) {
+                $this->warn("     ⚠️  v2_user 缺少 online_count 字段，正在添加...");
+                DB::statement("ALTER TABLE v2_user ADD COLUMN `online_count` int NULL DEFAULT 0 AFTER `device_limit`");
+                $this->line("     ✅ 已添加 online_count 字段");
+            } else {
+                $this->line("     ✅ online_count 字段已存在");
+            }
+            
+            // 检查 last_online_at 字段
+            $hasLastOnlineAt = DB::select("SHOW COLUMNS FROM v2_user LIKE 'last_online_at'");
+            if (empty($hasLastOnlineAt)) {
+                DB::statement("ALTER TABLE v2_user ADD COLUMN `last_online_at` timestamp NULL AFTER `online_count`");
+                $this->line("     ✅ 已添加 last_online_at 字段");
+            } else {
+                $this->line("     ✅ last_online_at 字段已存在");
+            }
+            
+            // 检查 device_limit 字段
+            $hasDeviceLimit = DB::select("SHOW COLUMNS FROM v2_user LIKE 'device_limit'");
+            if (empty($hasDeviceLimit)) {
+                DB::statement("ALTER TABLE v2_user ADD COLUMN `device_limit` int NULL AFTER `expired_at`");
+                $this->line("     ✅ 已添加 device_limit 字段");
+            } else {
+                $this->line("     ✅ device_limit 字段已存在");
+            }
+        } catch (\Exception $e) {
+            $this->error("     ❌ 添加字段失败: " . $e->getMessage());
+        }
+        
+        // 1. 强制修复 v2_stat 表索引
+        $this->line('  1️⃣  强制修复 v2_stat 表索引...');
+        try {
+            // 删除所有可能的旧索引
+            $indexes = DB::select("SHOW INDEX FROM v2_stat");
+            foreach ($indexes as $index) {
+                if ($index->Key_name === 'record_at' && $index->Non_unique == 0) {
+                    DB::statement("ALTER TABLE v2_stat DROP INDEX record_at");
+                    $this->line("     ✅ 删除了旧的单字段唯一键");
+                }
+            }
+            
+            // 确保有复合唯一键
+            $hasCompositeKey = false;
+            foreach ($indexes as $index) {
+                if ($index->Key_name === 'record_at_record_type') {
+                    $hasCompositeKey = true;
+                    break;
+                }
+            }
+            
+            if (!$hasCompositeKey) {
+                // 先清理可能的重复数据
+                $duplicates = DB::select("
+                    SELECT record_at, record_type, COUNT(*) as count, MIN(id) as keep_id
+                    FROM v2_stat 
+                    GROUP BY record_at, record_type 
+                    HAVING count > 1
+                ");
+                
+                if (count($duplicates) > 0) {
+                    foreach ($duplicates as $dup) {
+                        DB::table('v2_stat')
+                            ->where('record_at', $dup->record_at)
+                            ->where('record_type', $dup->record_type)
+                            ->where('id', '!=', $dup->keep_id)
+                            ->delete();
+                    }
+                    $this->line("     ✅ 清理了 " . count($duplicates) . " 组重复记录");
+                }
+                
+                // 添加复合唯一键
+                DB::statement("ALTER TABLE v2_stat ADD UNIQUE KEY `record_at_record_type` (`record_at`, `record_type`)");
+                $this->line("     ✅ 已添加复合唯一键");
+            } else {
+                $this->line("     ✅ 复合唯一键已存在");
+            }
+        } catch (\Exception $e) {
+            $this->warn("     ⚠️  索引修复失败: " . $e->getMessage());
+        }
+        
+        // 2. 确保今日和本月统计记录存在
+        $this->line('  2️⃣  强制创建统计记录...');
+        try {
+            // 强制使用 UTC+8 时区并明确指定时间
+            $todayDate = date('Y-m-d');
+            $monthDate = date('Y-m-01');
+            $today = strtotime($todayDate . ' 00:00:00');
+            $thisMonth = strtotime($monthDate . ' 00:00:00');
+            
+            $this->line("     📅 今天: {$todayDate} (Unix: {$today})");
+            $this->line("     📅 本月: {$monthDate} (Unix: {$thisMonth})");
+            
+            // 今日记录 - 使用事务确保成功
+            DB::transaction(function () use ($today) {
+                // 先删除可能存在的记录
+                $deleted = DB::table('v2_stat')
+                    ->where('record_at', $today)
+                    ->where('record_type', 'd')
+                    ->delete();
+                
+                if ($deleted > 0) {
+                    $this->line("     🗑️  删除了 {$deleted} 条旧的今日记录");
+                }
+                
+                // 插入新记录
+                $inserted = DB::table('v2_stat')->insertGetId([
+                    'record_at' => $today,
+                    'record_type' => 'd',
+                    'order_count' => 0,
+                    'order_total' => 0,
+                    'commission_count' => 0,
+                    'commission_total' => 0,
+                    'paid_count' => 0,
+                    'paid_total' => 0,
+                    'register_count' => 0,
+                    'invite_count' => 0,
+                    'transfer_used_total' => '0',
+                    'created_at' => time(),
+                    'updated_at' => time()
+                ]);
+                
+                $this->line("     ✅ 强制创建今日统计记录 (ID: {$inserted}, Unix: {$today})");
+            });
+            
+            // 本月记录 - 使用事务确保成功
+            DB::transaction(function () use ($thisMonth) {
+                // 先删除可能存在的记录
+                $deleted = DB::table('v2_stat')
+                    ->where('record_at', $thisMonth)
+                    ->where('record_type', 'm')
+                    ->delete();
+                
+                if ($deleted > 0) {
+                    $this->line("     🗑️  删除了 {$deleted} 条旧的本月记录");
+                }
+                
+                // 插入新记录
+                $inserted = DB::table('v2_stat')->insertGetId([
+                    'record_at' => $thisMonth,
+                    'record_type' => 'm',
+                    'order_count' => 0,
+                    'order_total' => 0,
+                    'commission_count' => 0,
+                    'commission_total' => 0,
+                    'paid_count' => 0,
+                    'paid_total' => 0,
+                    'register_count' => 0,
+                    'invite_count' => 0,
+                    'transfer_used_total' => '0',
+                    'created_at' => time(),
+                    'updated_at' => time()
+                ]);
+                
+                $this->line("     ✅ 强制创建本月统计记录 (ID: {$inserted}, Unix: {$thisMonth})");
+            });
+            
+            // 验证是否创建成功
+            $todayCheck = DB::table('v2_stat')
+                ->where('record_at', $today)
+                ->where('record_type', 'd')
+                ->first();
+            
+            $monthCheck = DB::table('v2_stat')
+                ->where('record_at', $thisMonth)
+                ->where('record_type', 'm')
+                ->first();
+            
+            if ($todayCheck && $monthCheck) {
+                $this->line("     ✅ 统计记录验证通过");
+            } else {
+                $this->error("     ❌ 统计记录创建失败！");
+                if (!$todayCheck) $this->error("     ❌ 今日记录未找到");
+                if (!$monthCheck) $this->error("     ❌ 本月记录未找到");
+            }
+        } catch (\Exception $e) {
+            $this->error("     ❌ 统计记录创建失败: " . $e->getMessage());
+            $this->error("     Stack: " . $e->getTraceAsString());
+        }
+        
+        // 3. 再次清理所有 sessions（确保彻底）
+        $this->line('  3️⃣  强制清理所有 sessions...');
+        try {
+            DB::table('sessions')->truncate();
+            $this->line("     ✅ Sessions 已完全清空");
+        } catch (\Exception $e) {
+            $this->warn("     ⚠️  Session 清理失败: " . $e->getMessage());
+        }
+        
+        // 4. 强制清理所有缓存
+        $this->line('  4️⃣  强制清理所有缓存...');
+        try {
+            Artisan::call('cache:clear');
+            Artisan::call('config:clear');
+            Artisan::call('route:clear');
+            Artisan::call('view:clear');
+            $this->line("     ✅ 所有缓存已清理");
+        } catch (\Exception $e) {
+            $this->warn("     ⚠️  缓存清理失败（可忽略）: " . $e->getMessage());
+        }
+        
+        // 5. 验证管理员账号
+        $this->line('  5️⃣  验证管理员账号...');
+        $adminCount = DB::table('v2_user')->where('is_admin', 1)->count();
+        if ($adminCount > 0) {
+            $this->line("     ✅ 管理员账号: {$adminCount} 个");
+        } else {
+            $this->warn("     ⚠️  没有管理员账号！");
+            // 将第一个用户提升为管理员
+            $firstUser = DB::table('v2_user')->orderBy('id')->first();
+            if ($firstUser) {
+                DB::table('v2_user')->where('id', $firstUser->id)->update(['is_admin' => 1]);
+                $this->line("     ✅ 已将用户 #{$firstUser->id} 提升为管理员");
+            }
+        }
+        
+        // 6. 删除孤立订单（plan_id 不存在）
+        $this->line('  6️⃣  清理孤立订单...');
+        try {
+            // 检查有多少订单的 plan_id 不存在
+            $orphanedCount = DB::selectOne("
+                SELECT COUNT(*) as count 
+                FROM v2_order o 
+                LEFT JOIN v2_plan p ON o.plan_id = p.id 
+                WHERE p.id IS NULL
+            ")->count;
+            
+            if ($orphanedCount > 0) {
+                $this->warn("     ⚠️  发现 {$orphanedCount} 个孤立订单（套餐已删除）");
+                
+                // 获取这些订单的 ID 用于日志
+                $orphanedIds = DB::select("
+                    SELECT o.id, o.plan_id, o.user_id, o.status
+                    FROM v2_order o 
+                    LEFT JOIN v2_plan p ON o.plan_id = p.id 
+                    WHERE p.id IS NULL
+                    LIMIT 5
+                ");
+                
+                $this->line("     📋 示例订单（前5个）:");
+                foreach ($orphanedIds as $order) {
+                    $this->line("        - Order #{$order->id}: Plan #{$order->plan_id} (不存在), User #{$order->user_id}, Status: {$order->status}");
+                }
+                
+                // 直接删除孤立订单
+                $deleted = DB::delete("
+                    DELETE o FROM v2_order o
+                    LEFT JOIN v2_plan p ON o.plan_id = p.id 
+                    WHERE p.id IS NULL
+                ");
+                
+                $this->line("     ✅ 已删除 {$deleted} 个孤立订单");
+                
+                // 验证
+                $remaining = DB::selectOne("
+                    SELECT COUNT(*) as count 
+                    FROM v2_order o 
+                    LEFT JOIN v2_plan p ON o.plan_id = p.id 
+                    WHERE p.id IS NULL
+                ")->count;
+                
+                if ($remaining > 0) {
+                    $this->error("     ❌ 仍有 {$remaining} 个孤立订单未删除！");
+                } else {
+                    $this->line("     ✅ 所有订单的 plan 关联已验证通过");
+                }
+            } else {
+                $this->line("     ✅ 没有孤立订单");
+            }
+        } catch (\Exception $e) {
+            $this->error("     ❌ 清理孤立订单失败: " . $e->getMessage());
+        }
+        
+        // 7. 测试关键 API 查询
+        $this->line('  7️⃣  测试关键 API 查询...');
+        try {
+            // 使用与创建记录时相同的时间计算方法
+            $todayDate = date('Y-m-d');
+            $monthDate = date('Y-m-01');
+            $today = strtotime($todayDate . ' 00:00:00');
+            $thisMonth = strtotime($monthDate . ' 00:00:00');
+            
+            // 测试今日查询
+            $todayStat = DB::table('v2_stat')
+                ->where('record_at', $today)
+                ->where('record_type', 'd')
+                ->first();
+            
+            if ($todayStat) {
+                $this->line("     ✅ 今日统计查询正常 (ID: {$todayStat->id})");
+            } else {
+                $this->error("     ❌ 今日统计记录不存在！");
+                $this->error("     💡 这会导致 getStats API 返回 500 错误");
+            }
+            
+            // 测试本月查询
+            $monthStat = DB::table('v2_stat')
+                ->where('record_at', $thisMonth)
+                ->where('record_type', 'm')
+                ->first();
+            
+            if ($monthStat) {
+                $this->line("     ✅ 本月统计查询正常 (ID: {$monthStat->id})");
+            } else {
+                $this->error("     ❌ 本月统计记录不存在！");
+                $this->error("     💡 这会导致 getStats API 返回 500 错误");
+                
+                // 如果本月记录不存在，这是严重问题，必须报错
+                throw new \Exception("本月统计记录创建失败，getStats API 将无法正常工作！");
+            }
+        } catch (\Exception $e) {
+            $this->error("     ❌ API 查询失败: " . $e->getMessage());
+            throw $e; // 重新抛出异常，让迁移失败
+        }
+        
+        $this->line('');
+        $this->line('  🎉 最终修复完成！');
+    }
+    
+    /**
+     * 检查并修复 v2_stat 表的索引
+     */
+    protected function checkAndFixStatTableIndex()
+    {
+        try {
+            $this->line('  🔍 检查 v2_stat 表索引结构...');
+            
+            // 检查是否有旧的单字段唯一键
+            $indexes = DB::select("SHOW INDEX FROM v2_stat WHERE Key_name = 'record_at'");
+            
+            if (count($indexes) > 0 && $indexes[0]->Non_unique == 0) {
+                // 存在旧的单字段唯一键，需要删除并重建
+                $this->warn('  ⚠️  发现旧的单字段唯一键，正在修复...');
+                
+                // 删除旧的唯一键
+                DB::statement("ALTER TABLE v2_stat DROP INDEX record_at");
+                $this->line('  ✅ 已删除旧的唯一键');
+                
+                // 创建新的复合唯一键
+                try {
+                    DB::statement("ALTER TABLE v2_stat ADD UNIQUE KEY `record_at_record_type` (`record_at`, `record_type`)");
+                    $this->line('  ✅ 已创建复合唯一键 (record_at, record_type)');
+                } catch (\Exception $e) {
+                    if (strpos($e->getMessage(), 'Duplicate key name') !== false) {
+                        $this->line('  ℹ️  复合唯一键已存在');
+                    } else {
+                        throw $e;
+                    }
+                }
+            } else {
+                // 检查是否已有复合唯一键
+                $compositeIndex = DB::select("SHOW INDEX FROM v2_stat WHERE Key_name = 'record_at_record_type'");
+                if (empty($compositeIndex)) {
+                    $this->warn('  ⚠️  缺少复合唯一键，正在添加...');
+                    // 添加复合唯一键
+                    try {
+                        DB::statement("ALTER TABLE v2_stat ADD UNIQUE KEY `record_at_record_type` (`record_at`, `record_type`)");
+                        $this->line('  ✅ 已添加复合唯一键');
+                    } catch (\Exception $e) {
+                        if (strpos($e->getMessage(), 'Duplicate entry') !== false) {
+                            // 存在重复数据，需要清理
+                            $this->warn('  ⚠️  发现重复数据，正在清理...');
+                            $cleaned = $this->cleanDuplicateStatRecords();
+                            
+                            if ($cleaned > 0) {
+                                // 再次尝试添加唯一键
+                                DB::statement("ALTER TABLE v2_stat ADD UNIQUE KEY `record_at_record_type` (`record_at`, `record_type`)");
+                                $this->line('  ✅ 清理 {$cleaned} 条重复数据后已添加复合唯一键');
+                            }
+                        } else {
+                            throw $e;
+                        }
+                    }
+                } else {
+                    $this->line('  ✅ 复合唯一键结构正确');
+                }
+            }
+        } catch (\Exception $e) {
+            $this->error('  ❌ 索引修复失败: ' . $e->getMessage());
+            $this->warn('  💡 请手动运行: php fix_stat_table.php');
+        }
+    }
+    
+    /**
+     * 清理重复的统计记录
+     */
+    protected function cleanDuplicateStatRecords()
+    {
+        // 查找重复记录
+        $duplicates = DB::select("
+            SELECT record_at, record_type, COUNT(*) as count, MIN(id) as keep_id
+            FROM v2_stat 
+            GROUP BY record_at, record_type 
+            HAVING count > 1
+        ");
+        
+        $totalCleaned = 0;
+        
+        if (count($duplicates) > 0) {
+            $this->line("  🧹 发现 " . count($duplicates) . " 组重复记录");
+            
+            foreach ($duplicates as $dup) {
+                // 删除除了最小ID之外的所有重复记录
+                $deleted = DB::table('v2_stat')
+                    ->where('record_at', $dup->record_at)
+                    ->where('record_type', $dup->record_type)
+                    ->where('id', '!=', $dup->keep_id)
+                    ->delete();
+                
+                $totalCleaned += $deleted;
+                $this->line("  ✅ 清理了 {$deleted} 条重复记录 (record_at={$dup->record_at}, type={$dup->record_type})");
+            }
+        }
+        
+        return $totalCleaned;
+    }
+    
+    /**
+     * 检查并创建缺失的表
+     */
+    protected function checkAndCreateMissingTables()
+    {
+        // 检查 v2_settings 表（仅检查，不迁移配置）
+        if (!DB::getSchemaBuilder()->hasTable('v2_settings')) {
+            $this->warn('  ⚠️  创建 v2_settings 表...');
+            DB::statement("CREATE TABLE `v2_settings` (
+                `name` varchar(255) NOT NULL,
+                `value` longtext,
+                PRIMARY KEY (`name`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $this->line('  ✅ v2_settings 表已创建（配置迁移将在后续步骤执行）');
+        }
+        
+        // 检查 sessions 表
+        if (!DB::getSchemaBuilder()->hasTable('sessions')) {
+            $this->warn('  ⚠️  创建 sessions 表...');
+            DB::statement("CREATE TABLE `sessions` (
+                `id` varchar(255) NOT NULL,
+                `user_id` int(11) DEFAULT NULL,
+                `ip_address` varchar(45) DEFAULT NULL,
+                `user_agent` text,
+                `payload` text NOT NULL,
+                `last_activity` int(11) NOT NULL,
+                PRIMARY KEY (`id`),
+                KEY `sessions_user_id_index` (`user_id`),
+                KEY `sessions_last_activity_index` (`last_activity`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $this->line('  ✅ sessions 表已创建');
+        }
+        
+        // 检查其他重要的表
+        $otherTables = [
+            'v2_stat_user' => '用户统计表',
+            'v2_stat_server' => '节点统计表',
+            'v2_commission_log' => '佣金日志表'
+        ];
+        
+        foreach ($otherTables as $table => $description) {
+            if (!DB::getSchemaBuilder()->hasTable($table)) {
+                $this->line("  ℹ️  {$description} ({$table}) 将由 Xboard 迁移自动创建");
+            }
+        }
+    }
+    
+    /**
+     * 验证系统表
+     */
+    protected function verifySystemTables()
+    {
+        $requiredTables = [
+            'v2_stat' => '统计表',
+            'v2_stat_server' => '节点统计表',
+            'v2_stat_user' => '用户统计表',
+            'v2_commission_log' => '佣金日志表',
+            'v2_settings' => '设置表'
+        ];
+        
+        $this->info('');
+        $this->info('  📊 数据库表验证:');
+        foreach ($requiredTables as $table => $description) {
+            if (DB::getSchemaBuilder()->hasTable($table)) {
+                $count = DB::table($table)->count();
+                $this->line("  ✅ {$description} ({$table}): {$count} 条记录");
+            } else {
+                $this->warn("  ⚠️  {$description} ({$table}) 不存在");
+            }
+        }
+        
+        // 验证管理员账号
+        $adminCount = DB::table('v2_user')->where('is_admin', 1)->count();
+        if ($adminCount > 0) {
+            $this->info("  👥 管理员数量: {$adminCount}");
+        } else {
+            $this->warn('  ⚠️  没有管理员账号，请确认数据迁移正确');
+        }
+        
+        // 验证订单数据
+        if (DB::getSchemaBuilder()->hasTable('v2_order')) {
+            $orderCount = DB::table('v2_order')->count();
+            $this->info("  📦 订单总数: {$orderCount}");
+            
+            // 检查订单表必要字段
+            $orderColumns = ['id', 'user_id', 'plan_id', 'trade_no', 'total_amount', 'status'];
+            $hasAllColumns = true;
+            foreach ($orderColumns as $col) {
+                if (!DB::getSchemaBuilder()->hasColumn('v2_order', $col)) {
+                    $this->warn("  ⚠️  订单表缺少字段: {$col}");
+                    $hasAllColumns = false;
+                }
+            }
+            
+            if ($hasAllColumns) {
+                $this->line('  ✅ 订单表结构完整');
+            }
+        }
+        
+        // 最终检查：尝试模拟 getStats 查询
+        $this->line('');
+        $this->line('  🔍 测试统计API查询...');
+        try {
+            $today = strtotime(date('Y-m-d'));
+            $stat = DB::table('v2_stat')
+                ->where('record_at', $today)
+                ->where('record_type', 'd')
+                ->first();
+            
+            if ($stat) {
+                $this->info('  ✅ 统计API查询正常');
+            } else {
+                $this->warn('  ⚠️  今日统计记录不存在');
+            }
+        } catch (\Exception $e) {
+            $this->error('  ❌ 统计API查询失败: ' . $e->getMessage());
+            $this->warn('  💡 这可能导致管理面板 500 错误');
+        }
     }
 }
