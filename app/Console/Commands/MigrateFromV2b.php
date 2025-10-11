@@ -336,7 +336,7 @@ class MigrateFromV2b extends Command
         foreach ($servers as $server) {
             $data = [
                 'type' => $type,
-                'code' => $type . '_' . $server->id,  // 使用 "协议_ID" 格式避免不同协议的 ID 冲突
+                'code' => (string)$server->id,  // ✅ code 只保存数字，节点后端用这个对接
                 'parent_id' => $server->parent_id,
                 'group_ids' => $this->normalizeJson($server->group_id),
                 'route_ids' => $this->normalizeJson($server->route_id ?? null),
@@ -465,7 +465,7 @@ class MigrateFromV2b extends Command
             
             $parentId = DB::table('v2_server')
                 ->where('type', $server->type)
-                ->where('code', $parentCode)
+                ->where('code', (string)$server->parent_id)
                 ->value('id');
 
             if ($parentId) {
@@ -793,7 +793,7 @@ class MigrateFromV2b extends Command
             // 准备基础数据（注意 Xboard 使用 group_ids 和 route_ids 复数形式）
             $serverData = [
                 'type' => $type,
-                'code' => $type . '_' . $server->id,
+                'code' => (string)$server->id,
                 'group_ids' => isset($server->group_id) ? (is_string($server->group_id) ? $server->group_id : json_encode($server->group_id)) : '[]',
                 'route_ids' => isset($server->route_id) ? (is_string($server->route_id) ? $server->route_id : json_encode($server->route_id)) : '[]',
                 'name' => $server->name,
