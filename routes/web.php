@@ -6,6 +6,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /*
 |--------------------------------------------------------------------------
@@ -17,6 +20,61 @@ use Illuminate\Support\Facades\File;
 | contains the "web" middleware group. Now create something great!
 |
 */
+
+/**
+ * 获取或生成隐藏的API路径
+ * 确保数据库只有一条记录
+ */
+function getHiddenApiPath() {
+    return Cache::rememberForever('hidden_api_path', function () {
+        // 获取所有记录
+        $allPaths = DB::table('v2_settings')
+            ->where('name', 'hidden_api_path')
+            ->get();
+        
+        // 如果有多条记录，清理多余的
+        if ($allPaths->count() > 1) {
+            // 保留第一条（ID最小的）
+            $keepId = $allPaths->min('id');
+            $keepPath = $allPaths->where('id', $keepId)->first()->value;
+            
+            // 删除其他的
+            DB::table('v2_settings')
+                ->where('name', 'hidden_api_path')
+                ->where('id', '!=', $keepId)
+                ->delete();
+            
+            Log::info('Cleaned duplicate hidden API paths', [
+                'kept' => $keepPath,
+                'deleted_count' => $allPaths->count() - 1
+            ]);
+            
+            return $keepPath;
+        }
+        
+        // 如果只有一条记录，直接使用
+        if ($allPaths->count() == 1) {
+            return $allPaths->first()->value;
+        }
+        
+        // 如果没有记录，生成新的
+        $part1 = strtolower(Str::random(3));
+        $part2 = strtolower(Str::random(3));
+        $path = "/{$part1}/{$part2}";
+        
+        // 插入到数据库
+        DB::table('v2_settings')->insert([
+            'name' => 'hidden_api_path',
+            'value' => $path,
+            'created_at' => now(),
+            'updated_at' => now()
+        ]);
+        
+        Log::info('Generated new hidden API path', ['path' => $path]);
+        
+        return $path;
+    });
+}
 
 
 Route::get('/', function (Request $request) {
@@ -52,13 +110,22 @@ Route::get('/', function (Request $request) {
             Log::info('Theme initialized in public directory', ['theme' => $theme]);
         }
 
+        // 自动注入隐藏API路径
+        $hiddenApiPath = getHiddenApiPath();
+        
+        // 获取主题配置并自动设置隐藏路径
+        $themeConfig = $themeService->getConfig($theme);
+        $themeConfig['enable_api_path_hiding'] = 'true';  // 自动启用
+        $themeConfig['custom_api_url'] = $hiddenApiPath;   // 自动设置路径
+        
         $renderParams = [
             'title' => admin_setting('app_name', 'Xboard'),
             'theme' => $theme,
             'version' => app(UpdateService::class)->getCurrentVersion(),
             'description' => admin_setting('app_description', 'Xboard is best'),
             'logo' => admin_setting('logo'),
-            'theme_config' => $themeService->getConfig($theme)
+            'theme_config' => $themeConfig,
+            'hidden_api_path' => $hiddenApiPath  // 备用：直接传递
         ];
         return view('theme::' . $theme . '.dashboard', $renderParams);
     } catch (Exception $e) {
