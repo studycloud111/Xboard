@@ -113,10 +113,8 @@ Route::get('/', function (Request $request) {
         // 自动注入隐藏API路径
         $hiddenApiPath = getHiddenApiPath();
         
-        // 获取主题配置并自动设置隐藏路径
+        // 获取主题配置
         $themeConfig = $themeService->getConfig($theme);
-        $themeConfig['enable_api_path_hiding'] = 'true';  // 自动启用
-        $themeConfig['custom_api_url'] = $hiddenApiPath;   // 自动设置路径
         
         $renderParams = [
             'title' => admin_setting('app_name', 'Xboard'),
