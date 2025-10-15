@@ -25,55 +25,57 @@ use Illuminate\Support\Str;
  * 获取或生成隐藏的API路径
  * 确保数据库只有一条记录
  */
-function getHiddenApiPath() {
-    return Cache::rememberForever('hidden_api_path', function () {
-        // 获取所有记录
-        $allPaths = DB::table('v2_settings')
-            ->where('name', 'hidden_api_path')
-            ->get();
-        
-        // 如果有多条记录，清理多余的
-        if ($allPaths->count() > 1) {
-            // 保留第一条（ID最小的）
-            $keepId = $allPaths->min('id');
-            $keepPath = $allPaths->where('id', $keepId)->first()->value;
-            
-            // 删除其他的
-            DB::table('v2_settings')
+if (!function_exists('getHiddenApiPath')) {
+    function getHiddenApiPath() {
+        return Cache::rememberForever('hidden_api_path', function () {
+            // 获取所有记录
+            $allPaths = DB::table('v2_settings')
                 ->where('name', 'hidden_api_path')
-                ->where('id', '!=', $keepId)
-                ->delete();
+                ->get();
             
-            Log::info('Cleaned duplicate hidden API paths', [
-                'kept' => $keepPath,
-                'deleted_count' => $allPaths->count() - 1
+            // 如果有多条记录，清理多余的
+            if ($allPaths->count() > 1) {
+                // 保留第一条（ID最小的）
+                $keepId = $allPaths->min('id');
+                $keepPath = $allPaths->where('id', $keepId)->first()->value;
+                
+                // 删除其他的
+                DB::table('v2_settings')
+                    ->where('name', 'hidden_api_path')
+                    ->where('id', '!=', $keepId)
+                    ->delete();
+                
+                Log::info('Cleaned duplicate hidden API paths', [
+                    'kept' => $keepPath,
+                    'deleted_count' => $allPaths->count() - 1
+                ]);
+                
+                return $keepPath;
+            }
+            
+            // 如果只有一条记录，直接使用
+            if ($allPaths->count() == 1) {
+                return $allPaths->first()->value;
+            }
+            
+            // 如果没有记录，生成新的
+            $part1 = strtolower(Str::random(3));
+            $part2 = strtolower(Str::random(3));
+            $path = "/{$part1}/{$part2}";
+            
+            // 插入到数据库
+            DB::table('v2_settings')->insert([
+                'name' => 'hidden_api_path',
+                'value' => $path,
+                'created_at' => now(),
+                'updated_at' => now()
             ]);
             
-            return $keepPath;
-        }
-        
-        // 如果只有一条记录，直接使用
-        if ($allPaths->count() == 1) {
-            return $allPaths->first()->value;
-        }
-        
-        // 如果没有记录，生成新的
-        $part1 = strtolower(Str::random(3));
-        $part2 = strtolower(Str::random(3));
-        $path = "/{$part1}/{$part2}";
-        
-        // 插入到数据库
-        DB::table('v2_settings')->insert([
-            'name' => 'hidden_api_path',
-            'value' => $path,
-            'created_at' => now(),
-            'updated_at' => now()
-        ]);
-        
-        Log::info('Generated new hidden API path', ['path' => $path]);
-        
-        return $path;
-    });
+            Log::info('Generated new hidden API path', ['path' => $path]);
+            
+            return $path;
+        });
+    }
 }
 
 
