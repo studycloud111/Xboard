@@ -1,6 +1,6 @@
 services:
   web:
-    image: ghcr.io/cedar2025/xboard:new
+    image: ghcr.io/studycloud111/xboardpro:master
     volumes:
       - ./.docker/.data/redis/:/data/
       - ./:/www/
