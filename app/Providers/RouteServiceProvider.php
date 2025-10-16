@@ -69,25 +69,46 @@ class RouteServiceProvider extends ServiceProvider
      */
     /**
      * 获取隐藏的API路径
+     * 
+     * 优化策略：
+     * - 在 Octane 环境下使用 60 秒短期缓存（保证性能的同时允许及时更新）
+     * - 非 Octane 环境使用每次请求读取（传统 PHP-FPM 模式）
      */
     private function getHiddenApiPath()
     {
         try {
-            // 尝试从缓存获取
-            return Cache::rememberForever('hidden_api_path_route', function () {
-                // 从数据库读取（只取第一条）
-                $result = DB::table('v2_settings')
-                    ->where('name', 'hidden_api_path')
-                    ->orderBy('id', 'asc')
-                    ->first();
-                
-                // 如果有记录，返回值；否则返回默认值
-                return $result ? $result->value : '/oxa/3vm';
-            });
+            // 检查是否是 Octane 环境
+            $isOctane = class_exists(\Laravel\Octane\Octane::class);
+            
+            if ($isOctane) {
+                // Octane 环境：使用 60 秒短期缓存（平衡性能和实时性）
+                return Cache::remember('hidden_api_path_route', 60, function () {
+                    return $this->fetchHiddenPathFromDatabase();
+                });
+            } else {
+                // 非 Octane 环境：每次都从数据库读取（性能影响小）
+                return $this->fetchHiddenPathFromDatabase();
+            }
         } catch (\Exception $e) {
             // 如果出现任何错误（比如数据库未连接），使用默认值
+            \Log::warning('Failed to get hidden API path: ' . $e->getMessage());
             return '/oxa/3vm';
         }
+    }
+
+    /**
+     * 从数据库获取隐藏路径
+     */
+    private function fetchHiddenPathFromDatabase()
+    {
+        // 从数据库读取（只取第一条）
+        $result = DB::table('v2_settings')
+            ->where('name', 'hidden_api_path')
+            ->orderBy('id', 'asc')
+            ->first();
+        
+        // 如果有记录，返回值；否则返回默认值
+        return $result ? $result->value : '/oxa/3vm';
     }
 
     protected function mapApiRoutes()

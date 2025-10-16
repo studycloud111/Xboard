@@ -207,6 +207,23 @@ class MigrateFromV2b extends Command
         try {
             $this->info('0️⃣  准备迁移环境...');
             
+            // 检查是否已经迁移过
+            if (DB::getSchemaBuilder()->hasTable('v2_server')) {
+                $serverCount = DB::table('v2_server')->count();
+                if ($serverCount > 0) {
+                    $this->warn('');
+                    $this->warn('  ⚠️  检测到 v2_server 表中已有 ' . $serverCount . ' 个节点数据');
+                    $this->warn('  ⚠️  可能已经执行过迁移，继续执行可能导致数据重复！');
+                    $this->warn('');
+                    
+                    if (!$this->confirm('  确定要继续迁移吗？这可能导致数据重复。', false)) {
+                        $this->info('');
+                        $this->info('  ℹ️  迁移已取消');
+                        return 0;
+                    }
+                }
+            }
+            
             // 检查数据库连接
             try {
                 DB::connection()->getPdo();
@@ -236,6 +253,8 @@ class MigrateFromV2b extends Command
             $this->info('');
             
                 $this->info('1️⃣  备份节点数据...');
+                // 在备份前强制清理临时表（确保干净的起始状态）
+                $this->cleanupTempBackupTable();
                 $this->backupServerData();
                 $this->info('✅ 节点数据已备份到临时表');
                 
@@ -731,14 +750,45 @@ class MigrateFromV2b extends Command
     }
 
     /**
+     * 清理临时备份表（独立函数，确保在任何操作前执行）
+     */
+    protected function cleanupTempBackupTable()
+    {
+        $this->line("  🗑️  清理旧的临时备份表...");
+        
+        try {
+            // 多次尝试删除，确保表被清除
+            for ($i = 0; $i < 3; $i++) {
+                DB::statement("DROP TABLE IF EXISTS `v2_server_backup_temp`");
+                
+                // 验证是否真的删除
+                $tableExists = DB::select("SHOW TABLES LIKE 'v2_server_backup_temp'");
+                if (empty($tableExists)) {
+                    $this->line("  ✅ 临时表已清理");
+                    return;
+                }
+                
+                // 如果还存在，等待一下再试
+                if ($i < 2) {
+                    $this->warn("  ⚠️  第 " . ($i + 1) . " 次删除未生效，重试...");
+                    usleep(100000); // 等待 0.1 秒
+                }
+            }
+            
+            // 如果3次都失败，强制删除（不使用 IF EXISTS）
+            DB::statement("DROP TABLE `v2_server_backup_temp`");
+            $this->line("  ✅ 强制删除临时表成功");
+            
+        } catch (\Exception $e) {
+            $this->line("  ℹ️  临时表不存在或已清理");
+        }
+    }
+    
+    /**
      * 备份所有节点数据到临时表
      */
     protected function backupServerData()
     {
-        // 强制删除旧的临时备份表（如果存在）
-        DB::statement("DROP TABLE IF EXISTS `v2_server_backup_temp`");
-        $this->line("  🗑️  已删除旧临时表（如果存在）");
-        
         // 创建全新的临时备份表
         DB::statement("CREATE TABLE `v2_server_backup_temp` (
             `id` int NOT NULL,
@@ -763,21 +813,52 @@ class MigrateFromV2b extends Command
         ];
         
         $totalBackedUp = 0;
+        $skippedDuplicates = 0;
+        
         foreach ($serverTypes as $table => $type) {
             if (DB::getSchemaBuilder()->hasTable($table)) {
                 $servers = DB::table($table)->get();
+                $typeBackedUp = 0;
+                
                 foreach ($servers as $server) {
-                    DB::table('v2_server_backup_temp')->insert([
-                        'id' => $server->id,
-                        'type' => $type,
-                        'data' => json_encode($server)
-                    ]);
-                    $totalBackedUp++;
+                    try {
+                        // 检查是否已存在（避免重复插入）
+                        $exists = DB::table('v2_server_backup_temp')
+                            ->where('type', $type)
+                            ->where('id', $server->id)
+                            ->exists();
+                        
+                        if ($exists) {
+                            $this->warn("    ⚠️  跳过重复节点: {$type} ID {$server->id}");
+                            $skippedDuplicates++;
+                            continue;
+                        }
+                        
+                        // 插入备份数据
+                        DB::table('v2_server_backup_temp')->insert([
+                            'id' => $server->id,
+                            'type' => $type,
+                            'data' => json_encode($server)
+                        ]);
+                        $totalBackedUp++;
+                        $typeBackedUp++;
+                    } catch (\Exception $e) {
+                        $this->warn("    ⚠️  备份节点失败: {$type} ID {$server->id} - " . $e->getMessage());
+                        $skippedDuplicates++;
+                    }
                 }
-                $this->line("  ✅ 备份 {$type}: " . count($servers) . " 个节点");
+                
+                if ($typeBackedUp > 0) {
+                    $this->line("  ✅ 备份 {$type}: {$typeBackedUp} 个节点");
+                } else {
+                    $this->line("  ⏭️  跳过 {$type}: 0 个节点");
+                }
             }
         }
         
+        if ($skippedDuplicates > 0) {
+            $this->warn("  ⚠️  跳过重复/错误节点: {$skippedDuplicates} 个");
+        }
         $this->line("  📊 总计备份: {$totalBackedUp} 个节点");
     }
 
