@@ -9,7 +9,7 @@ use App\Models\Server;
 
 class SingBox extends AbstractProtocol
 {
-    public $flags = ['sing-box', 'hiddify', 'sfm'];
+    public $flags = ['sing-box', 'hiddify', 'hiddifynext', 'sfm'];
     public $allowedProtocols = [
         Server::TYPE_SHADOWSOCKS,
         Server::TYPE_TROJAN,
@@ -355,11 +355,15 @@ class SingBox extends AbstractProtocol
                 'insecure' => (bool) data_get($protocol_settings, 'tls.allow_insecure', false),
             ]
         ];
-        // 支持 1.11.0 版本及以上 `server_ports` 和 `hop_interval` 配置
-        if ($this->supportsFeature('sing-box', '1.11.0')) {
-            if (isset($server['ports'])) {
-                $baseConfig['server_ports'] = [str_replace('-', ':', $server['ports'])];
-            }
+        
+        // 端口跳跃功能支持（sing-box 1.11.0+）
+        // 只有在配置了端口范围（ports）且客户端支持的情况下才启用
+        if (isset($server['ports']) && $this->isPortHoppingSupported()) {
+            // 使用端口范围替代单一端口
+            $baseConfig['server_ports'] = [str_replace('-', ':', $server['ports'])];
+            unset($baseConfig['server_port']);
+            
+            // 如果配置了跳跃间隔，一并下发
             if (isset($protocol_settings['hop_interval'])) {
                 $baseConfig['hop_interval'] = "{$protocol_settings['hop_interval']}s";
             }
@@ -504,5 +508,38 @@ class SingBox extends AbstractProtocol
         }
 
         return $array;
+    }
+
+    /**
+     * 检测客户端是否支持端口跳跃功能
+     * 
+     * 端口跳跃功能需要 sing-box 内核 >= 1.11.0
+     * 采用白名单策略，只为确认支持的客户端版本启用
+     * 
+     * @return bool
+     */
+    protected function isPortHoppingSupported(): bool
+    {
+        // 如果没有客户端信息，默认不支持（保守策略）
+        if (empty($this->clientName) || empty($this->clientVersion)) {
+            return false;
+        }
+
+        // 各客户端支持端口跳跃的最低版本要求（白名单模式）
+        // 只添加已确认支持的客户端版本，避免误判导致导入失败
+        $minVersions = [
+            'sing-box' => '1.11.0',      // sing-box 原版 >= 1.11.0 确认支持
+            // 'hiddifynext' => '2.5.0',    // HiddifyNext 需要更高版本（待确认）
+            // 'hiddify' => '0.14.0',       // Hiddify 老版本（待确认）
+            // 'sfm' => '1.11.0',           // SFM (待确认)
+        ];
+
+        // 检查客户端是否在白名单中
+        if (!isset($minVersions[$this->clientName])) {
+            return false;
+        }
+
+        // 版本比较
+        return version_compare($this->clientVersion, $minVersions[$this->clientName], '>=');
     }
 }
