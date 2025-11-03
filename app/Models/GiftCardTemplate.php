@@ -355,4 +355,3 @@ class GiftCardTemplate extends Model
         return $result['can_use'];
     }
 }
-}
