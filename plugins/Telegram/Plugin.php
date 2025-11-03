@@ -62,7 +62,7 @@ class Plugin extends AbstractPlugin
       $payment->name,
       $order->trade_no
     );
-    $this->telegramService->sendMessageWithAdmin($message, true);
+    $this->telegramService->sendMessageWithAdmin($message, false);
   }
 
   public function sendTicketNotify(Ticket $ticket): void
