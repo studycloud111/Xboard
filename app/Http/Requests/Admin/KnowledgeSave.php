@@ -19,9 +19,9 @@ class KnowledgeSave extends FormRequest
     public function rules()
     {
         return [
-            'category' => 'required|string|max:255',
-            'language' => 'required|string|max:16',
-            'title' => 'required|string|max:255',
+            'category' => 'required',
+            'language' => 'required',
+            'title' => 'required',
             'body' => 'required',
             'show' => 'nullable|boolean'
         ];
