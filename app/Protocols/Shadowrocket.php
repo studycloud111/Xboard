@@ -29,10 +29,8 @@ class Shadowrocket extends AbstractProtocol
     {
         $servers = $this->servers;
         $user = $this->user;
-        $appName = admin_setting('app_name', 'XBoard');
 
-        // Shadowrocket does not read remark from headers; prepend a TITLE line so the app can show site name instead of token.
-        $uri = "TITLE={$appName}\r\n";
+        $uri = '';
         //display remaining traffic and expire date
         $upload = round($user['u'] / (1024 * 1024 * 1024), 2);
         $download = round($user['d'] / (1024 * 1024 * 1024), 2);
@@ -66,8 +64,7 @@ class Shadowrocket extends AbstractProtocol
             }
         }
         return response(base64_encode($uri))
-            ->header('content-type', 'text/plain')
-            ->header('profile-title', $appName);
+            ->header('content-type', 'text/plain');
     }
 
 
