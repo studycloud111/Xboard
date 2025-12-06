@@ -29,6 +29,7 @@ class Shadowrocket extends AbstractProtocol
     {
         $servers = $this->servers;
         $user = $this->user;
+        $appName = admin_setting('app_name', 'XBoard');
 
         $uri = '';
         //display remaining traffic and expire date
@@ -64,7 +65,9 @@ class Shadowrocket extends AbstractProtocol
             }
         }
         return response(base64_encode($uri))
-            ->header('content-type', 'text/plain');
+            ->header('content-type', 'text/plain')
+            ->header('profile-title', 'base64:' . base64_encode($appName))
+            ->header('Subscription-Userinfo', "upload={$user['u']}; download={$user['d']}; total={$user['transfer_enable']}; expire={$user['expired_at']}");
     }
 
 
