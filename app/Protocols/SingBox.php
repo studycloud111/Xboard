@@ -356,10 +356,9 @@ class SingBox extends AbstractProtocol
             ]
         ];
         
-        // 端口跳跃功能支持（sing-box 1.11.0+）
-        // 只有在配置了端口范围（ports）且客户端支持的情况下才启用
-        if (isset($server['ports']) && $this->isPortHoppingSupported()) {
-            // 使用端口范围替代单一端口
+        // 端口跳跃：若节点配置了端口范围，一律下发 server_ports（由客户端自行兼容/忽略）
+        if (isset($server['ports'])) {
+            // 使用端口范围替代单一端口；如客户端不支持会自行忽略
             $baseConfig['server_ports'] = [str_replace('-', ':', $server['ports'])];
             unset($baseConfig['server_port']);
             
