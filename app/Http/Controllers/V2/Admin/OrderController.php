@@ -180,10 +180,21 @@ class OrderController extends Controller
             'commission_status'
         ]);
 
+        $commissionStatus = $params['commission_status'] ?? null;
+
         $order = Order::where('trade_no', $request->input('trade_no'))
             ->first();
         if (!$order) {
             return $this->fail([400202, '订单不存在']);
+        }
+
+        if ($commissionStatus !== null) {
+            if ($order->commission_status === null || (int) $order->commission_status !== 0) {
+                return $this->fail([400, '只能对待确认的佣金进行操作']);
+            }
+            if (!in_array((int) $commissionStatus, [1, 3], true)) {
+                return $this->fail([400, '佣金状态格式不正确']);
+            }
         }
 
         try {
