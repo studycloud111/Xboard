@@ -80,6 +80,44 @@ class UserController extends Controller
      */
     private function buildFilterQuery(Builder $query, string $field, mixed $value): void
     {
+        // Keyword search across multiple fields (AND by whitespace tokens, OR within token).
+        if (in_array($field, ['keyword', 'q'], true)) {
+            $raw = is_string($value) || is_numeric($value) ? trim((string) $value) : '';
+            if ($raw === '') {
+                return;
+            }
+
+            $tokens = preg_split('/\s+/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $tokens = array_values(array_filter(array_map(fn($t) => trim((string) $t), $tokens)));
+
+            foreach ($tokens as $token) {
+                $query->where(function ($q) use ($token) {
+                    $q->where('email', 'like', "%{$token}%")
+                        ->orWhere('remarks', 'like', "%{$token}%")
+                        ->orWhere('token', 'like', "%{$token}%")
+                        ->orWhere('uuid', 'like', "%{$token}%")
+                        ->orWhereHas('invite_user', function ($sub) use ($token) {
+                            $sub->where('email', 'like', "%{$token}%");
+                        })
+                        ->orWhereHas('plan', function ($sub) use ($token) {
+                            $sub->where('name', 'like', "%{$token}%");
+                        })
+                        ->orWhereHas('group', function ($sub) use ($token) {
+                            $sub->where('name', 'like', "%{$token}%");
+                        });
+
+                    if (is_numeric($token)) {
+                        $n = (int) $token;
+                        $q->orWhere('id', $n)
+                            ->orWhere('invite_user_id', $n)
+                            ->orWhere('plan_id', $n)
+                            ->orWhere('group_id', $n);
+                    }
+                });
+            }
+            return;
+        }
+
         // 处理关联查询
         if (str_contains($field, '.')) {
             [$relation, $relationField] = explode('.', $field);

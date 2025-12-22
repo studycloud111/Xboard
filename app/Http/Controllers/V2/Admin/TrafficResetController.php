@@ -72,6 +72,7 @@ class TrafficResetController extends Controller
 
     // 格式化数据
     $formattedLogs = $logs->getCollection()->map(function (TrafficResetLog $log) {
+      $reason = is_array($log->metadata) ? ($log->metadata['reason'] ?? null) : null;
       return [
         'id' => $log->id,
         'user_id' => $log->user_id,
@@ -93,6 +94,7 @@ class TrafficResetController extends Controller
         ],
         'trigger_source' => $log->trigger_source,
         'trigger_source_name' => $log->getSourceName(),
+        'reason' => $reason,
         'metadata' => $log->metadata,
         'created_at' => $log->created_at,
       ];
@@ -200,6 +202,7 @@ class TrafficResetController extends Controller
 
     /** @var \Illuminate\Database\Eloquent\Collection<int, \App\Models\TrafficResetLog> $history */
     $data = $history->map(function (TrafficResetLog $log) {
+      $reason = is_array($log->metadata) ? ($log->metadata['reason'] ?? null) : null;
       return [
         'id' => $log->id,
         'reset_type' => $log->reset_type,
@@ -213,6 +216,7 @@ class TrafficResetController extends Controller
         ],
         'trigger_source' => $log->trigger_source,
         'trigger_source_name' => $log->getSourceName(),
+        'reason' => $reason,
         'metadata' => $log->metadata,
       ];
     });
