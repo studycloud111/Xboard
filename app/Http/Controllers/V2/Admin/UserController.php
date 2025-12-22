@@ -80,7 +80,7 @@ class UserController extends Controller
      */
     private function buildFilterQuery(Builder $query, string $field, mixed $value): void
     {
-        // Keyword search across multiple fields (AND by whitespace tokens, OR within token).
+        // Keyword search across multiple fields (OR by whitespace tokens).
         if (in_array($field, ['keyword', 'q'], true)) {
             $raw = is_string($value) || is_numeric($value) ? trim((string) $value) : '';
             if ($raw === '') {
@@ -90,31 +90,34 @@ class UserController extends Controller
             $tokens = preg_split('/\s+/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
             $tokens = array_values(array_filter(array_map(fn($t) => trim((string) $t), $tokens)));
 
-            foreach ($tokens as $token) {
-                $query->where(function ($q) use ($token) {
-                    $q->where('email', 'like', "%{$token}%")
-                        ->orWhere('remarks', 'like', "%{$token}%")
-                        ->orWhere('token', 'like', "%{$token}%")
-                        ->orWhere('uuid', 'like', "%{$token}%")
-                        ->orWhereHas('invite_user', function ($sub) use ($token) {
-                            $sub->where('email', 'like', "%{$token}%");
-                        })
-                        ->orWhereHas('plan', function ($sub) use ($token) {
-                            $sub->where('name', 'like', "%{$token}%");
-                        })
-                        ->orWhereHas('group', function ($sub) use ($token) {
-                            $sub->where('name', 'like', "%{$token}%");
-                        });
+            $query->where(function ($outer) use ($tokens) {
+                foreach ($tokens as $i => $token) {
+                    $apply = $i === 0 ? 'where' : 'orWhere';
+                    $outer->{$apply}(function ($q) use ($token) {
+                        $q->where('email', 'like', "%{$token}%")
+                            ->orWhere('remarks', 'like', "%{$token}%")
+                            ->orWhere('token', 'like', "%{$token}%")
+                            ->orWhere('uuid', 'like', "%{$token}%")
+                            ->orWhereHas('invite_user', function ($sub) use ($token) {
+                                $sub->where('email', 'like', "%{$token}%");
+                            })
+                            ->orWhereHas('plan', function ($sub) use ($token) {
+                                $sub->where('name', 'like', "%{$token}%");
+                            })
+                            ->orWhereHas('group', function ($sub) use ($token) {
+                                $sub->where('name', 'like', "%{$token}%");
+                            });
 
-                    if (is_numeric($token)) {
-                        $n = (int) $token;
-                        $q->orWhere('id', $n)
-                            ->orWhere('invite_user_id', $n)
-                            ->orWhere('plan_id', $n)
-                            ->orWhere('group_id', $n);
-                    }
-                });
-            }
+                        if (is_numeric($token)) {
+                            $n = (int) $token;
+                            $q->orWhere('id', $n)
+                                ->orWhere('invite_user_id', $n)
+                                ->orWhere('plan_id', $n)
+                                ->orWhere('group_id', $n);
+                        }
+                    });
+                }
+            });
             return;
         }
 
