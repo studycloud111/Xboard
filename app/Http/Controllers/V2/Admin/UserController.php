@@ -165,8 +165,20 @@ class UserController extends Controller
         $users = $userModel->orderBy('id', 'desc')
             ->paginate($pageSize, ['*'], 'page', $current);
 
-        $users->getCollection()->transform(function ($user): array {
-            return self::transformUserData($user);
+        $userIds = $users->getCollection()->pluck('id')->all();
+        $cachePrefix = 'ALIVE_IP_USER_';
+        $aliveData = cache()->many(array_map(fn(int $id): string => $cachePrefix . $id, $userIds));
+        $onlineCounts = [];
+        foreach ($userIds as $userId) {
+            $key = $cachePrefix . $userId;
+            $cached = $aliveData[$key] ?? null;
+            $onlineCounts[$userId] = is_array($cached) ? (int) ($cached['alive_ip'] ?? 0) : 0;
+        }
+
+        $users->getCollection()->transform(function ($user) use ($onlineCounts): array {
+            $data = self::transformUserData($user);
+            $data['online_ip_count'] = $onlineCounts[$user->id] ?? 0;
+            return $data;
         });
 
         return $this->paginate($users);
