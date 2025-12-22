@@ -7,6 +7,7 @@ use Illuminate\Console\Command;
 use App\Models\Order;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class CheckCommission extends Command
 {
@@ -62,23 +63,34 @@ class CheckCommission extends Command
     {
         $orders = Order::where('commission_status', 1)
             ->whereNotNull('invite_user_id')
+            ->orderBy('id', 'asc')
             ->get();
+
         foreach ($orders as $order) {
-            try{
-                DB::beginTransaction();
-                if (!$this->payHandle($order->invite_user_id, $order)) {
-                    DB::rollBack();
-                    continue;
-                }
-                $order->commission_status = 2;
-                if (!$order->save()) {
-                    DB::rollBack();
-                    continue;
-                }
-                DB::commit();
-            } catch (\Exception $e){
-                DB::rollBack();
-                throw $e;
+            try {
+                DB::transaction(function () use ($order) {
+                    $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->first();
+                    if (!$lockedOrder) return;
+                    if ((int) $lockedOrder->commission_status !== 1) return;
+                    if (empty($lockedOrder->invite_user_id)) return;
+
+                    if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
+                        throw new \RuntimeException('payHandle returned false');
+                    }
+
+                    $lockedOrder->commission_status = 2;
+                    $lockedOrder->saveOrFail();
+                }, 3);
+            } catch (\Throwable $e) {
+                Log::error('Auto pay commission failed', [
+                    'order_id' => $order->id,
+                    'trade_no' => $order->trade_no ?? null,
+                    'invite_user_id' => $order->invite_user_id ?? null,
+                    'commission_status' => $order->commission_status ?? null,
+                    'commission_balance' => $order->commission_balance ?? null,
+                    'error' => $e->getMessage(),
+                ]);
+                continue;
             }
         }
     }
@@ -109,7 +121,6 @@ class CheckCommission extends Command
                 $inviter->commission_balance = $inviter->commission_balance + $commissionBalance;
             }
             if (!$inviter->save()) {
-                DB::rollBack();
                 return false;
             }
             CommissionLog::create([
