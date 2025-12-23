@@ -78,6 +78,40 @@ if (!function_exists('getHiddenApiPath')) {
     }
 }
 
+// Theme locale fallback (for themes missing `assets/locales/*.json`)
+Route::get('/theme/{theme}/assets/locales/{locale}.json', function (string $theme, string $locale) {
+    if (!preg_match('/^[A-Za-z0-9_-]+$/', $theme) || !preg_match('/^[A-Za-z0-9_-]+$/', $locale)) {
+        abort(404);
+    }
+
+    $publicPath = public_path("theme/{$theme}/assets/locales/{$locale}.json");
+    if (File::exists($publicPath)) {
+        return response()->file($publicPath, ['Content-Type' => 'application/json; charset=UTF-8']);
+    }
+
+    $fallbackPath = resource_path("theme-locales/{$locale}.json");
+    if (File::exists($fallbackPath)) {
+        return response()->file($fallbackPath, ['Content-Type' => 'application/json; charset=UTF-8']);
+    }
+
+    $aliasLocale = match ($locale) {
+        'zh' => 'zh-CN',
+        'en' => 'en-US',
+        default => null,
+    };
+    if ($aliasLocale) {
+        $aliasPath = resource_path("theme-locales/{$aliasLocale}.json");
+        if (File::exists($aliasPath)) {
+            return response()->file($aliasPath, ['Content-Type' => 'application/json; charset=UTF-8']);
+        }
+    }
+
+    return response()->json((object) []);
+})->where([
+    'theme' => '[A-Za-z0-9_-]+',
+    'locale' => '[A-Za-z0-9_-]+',
+]);
+
 
 Route::get('/', function (Request $request) {
     if (admin_setting('app_url') && admin_setting('safe_mode_enable', 0)) {
@@ -111,6 +145,9 @@ Route::get('/', function (Request $request) {
             }
             Log::info('Theme initialized in public directory', ['theme' => $theme]);
         }
+
+        // Ensure locale files exist for themes that don't ship them.
+        $themeService->ensurePublicThemeLocales($theme);
 
         // 自动注入隐藏API路径
         $hiddenApiPath = getHiddenApiPath();

@@ -210,6 +210,7 @@ class ThemeService
             if (!File::copyDirectory($themePath, $targetPath)) {
                 throw new Exception('Failed to copy theme files');
             }
+            $this->ensurePublicThemeLocales($theme);
 
             admin_setting(['current_theme' => $theme]);
             return true;
@@ -383,6 +384,7 @@ class ThemeService
             if (!File::copyDirectory($themePath, $targetPath)) {
                 throw new Exception('Failed to copy theme files');
             }
+            $this->ensurePublicThemeLocales($currentTheme);
 
             Log::info('Refreshed current theme files', ['theme' => $currentTheme]);
             return true;
@@ -393,6 +395,44 @@ class ThemeService
                 'error' => $e->getMessage()
             ]);
             return false;
+        }
+    }
+
+    /**
+     * Ensure public theme locale files exist (fallback for themes without locales).
+     */
+    public function ensurePublicThemeLocales(string $theme): void
+    {
+        try {
+            $publicThemePath = public_path('theme/' . $theme);
+            if (!File::exists($publicThemePath)) {
+                return;
+            }
+
+            $publicLocalesPath = $publicThemePath . '/assets/locales';
+            if (!File::exists($publicLocalesPath)) {
+                File::makeDirectory($publicLocalesPath, 0755, true);
+            }
+
+            $fallbackLocalesPath = resource_path('theme-locales');
+            if (!File::exists($fallbackLocalesPath)) {
+                return;
+            }
+
+            foreach (File::files($fallbackLocalesPath) as $file) {
+                if (strtolower($file->getExtension()) !== 'json') {
+                    continue;
+                }
+                $targetFile = $publicLocalesPath . '/' . $file->getFilename();
+                if (!File::exists($targetFile)) {
+                    File::copy($file->getRealPath(), $targetFile);
+                }
+            }
+        } catch (Exception $e) {
+            Log::warning('Failed to ensure theme locale files', [
+                'theme' => $theme,
+                'error' => $e->getMessage()
+            ]);
         }
     }
 

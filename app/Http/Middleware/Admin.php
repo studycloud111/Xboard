@@ -19,10 +19,10 @@ class Admin
     public function handle($request, Closure $next)
     {
         /** @var User|null $user */
-        $user = Auth::guard('sanctum')->user();
+        $user = Auth::guard()->user();
         
         if (!$user || !$user->is_admin) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            throw new ApiException('Unauthorized', 403);
         }
         
         return $next($request);
