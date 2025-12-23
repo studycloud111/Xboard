@@ -14,12 +14,8 @@
       secure_path: "{{ $secure_path }}",
     };
   </script>
-  <script type="module" crossorigin src="/assets/admin/assets/index.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/admin/assets/index.css" />
-  <link rel="stylesheet" crossorigin href="/assets/admin/assets/vendor.css">
-  <script src="/assets/admin/locales/en-US.js"></script>
-  <script src="/assets/admin/locales/zh-CN.js"></script>
-  <script src="/assets/admin/locales/ko-KR.js"></script>
+  <script type="module" crossorigin src="/assets/admin-xboard/assets/index.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/admin-xboard/assets/index.css" />
 </head>
 
 <body>
