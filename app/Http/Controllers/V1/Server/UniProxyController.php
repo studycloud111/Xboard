@@ -90,6 +90,7 @@ class UniProxyController extends Controller
         $node = $this->getNodeInfo($request);
         $nodeType = $node->type;
         $protocolSettings = $node->protocol_settings;
+        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
 
         $serverPort = $node->server_port;
         $host = $node->host;
@@ -199,6 +200,10 @@ class UniProxyController extends Controller
             $response['routes'] = ServerService::getRoutes($node['route_ids']);
         }
 
+        if ($isV2Node) {
+            $response = $this->adaptConfigForV2Node($response, $node);
+        }
+
         $eTag = sha1(json_encode($response));
         if (strpos($request->header('If-None-Match', ''), $eTag) !== false) {
             return response(null, 304);
@@ -272,5 +277,135 @@ class UniProxyController extends Controller
         ], $cacheTime);
 
         return response()->json(['data' => true, "code" => 0, "message" => "success"]);
+    }
+
+    private function adaptConfigForV2Node(array $response, $node): array
+    {
+        $nodeType = (string) $node->type;
+        $protocolSettings = $node->protocol_settings;
+
+        $protocol = $this->mapV2NodeProtocol($nodeType, $protocolSettings);
+        $response['protocol'] = $protocol;
+
+        if (array_key_exists('networkSettings', $response)) {
+            $response['network_settings'] = $response['networkSettings'];
+        } else {
+            $response['network_settings'] = data_get($protocolSettings, 'network_settings') ?: null;
+        }
+
+        if ($protocol === 'anytls' && empty($response['network'])) {
+            $response['network'] = 'tcp';
+        }
+
+        $tls = $this->getV2NodeTlsValue($nodeType, $protocolSettings);
+        if ($tls !== null) {
+            $response['tls'] = $tls;
+        }
+
+        $tlsSettings = $this->buildV2NodeTlsSettings($node, $nodeType, $protocolSettings, $tls ?? 0);
+        if (!empty($tlsSettings)) {
+            $response['tls_settings'] = $tlsSettings;
+        }
+
+        if ($protocol === 'hysteria2') {
+            $upMbps = (int) ($response['up_mbps'] ?? 0);
+            $downMbps = (int) ($response['down_mbps'] ?? 0);
+            $response['ignore_client_bandwidth'] = $upMbps === 0 && $downMbps === 0;
+
+            if (array_key_exists('obfs-password', $response) && !array_key_exists('obfs_password', $response)) {
+                $response['obfs_password'] = $response['obfs-password'];
+            }
+            if (array_key_exists('obfs_password', $response) && !array_key_exists('obfs-password', $response)) {
+                $response['obfs-password'] = $response['obfs_password'];
+            }
+        }
+
+        if (isset($response['base_config']) && is_array($response['base_config'])) {
+            $response['base_config'] += [
+                'node_report_min_traffic' => 0,
+                'device_online_min_traffic' => 0,
+            ];
+        }
+
+        return $response;
+    }
+
+    private function mapV2NodeProtocol(string $nodeType, array $protocolSettings): string
+    {
+        if ($nodeType !== 'hysteria') {
+            return $nodeType;
+        }
+
+        $version = (int) data_get($protocolSettings, 'version', 2);
+        return $version === 2 ? 'hysteria2' : 'hysteria';
+    }
+
+    private function getV2NodeTlsValue(string $nodeType, array $protocolSettings): ?int
+    {
+        return match ($nodeType) {
+            'vmess', 'vless' => (int) data_get($protocolSettings, 'tls', 0),
+            'trojan', 'hysteria', 'tuic', 'anytls' => 1,
+            'shadowsocks' => 0,
+            default => null,
+        };
+    }
+
+    private function buildV2NodeTlsSettings($node, string $nodeType, array $protocolSettings, int $tls): array
+    {
+        if ($tls <= 0) {
+            return [];
+        }
+
+        $baseTlsSettings = $this->getBaseTlsSettingsForV2Node($nodeType, $protocolSettings, $tls);
+        $serverName = $this->resolveV2NodeServerName($node, $nodeType, $protocolSettings, $tls, $baseTlsSettings);
+
+        $tlsSettings = $baseTlsSettings;
+        $tlsSettings['server_name'] = $serverName;
+
+        if ($tls === 2) {
+            $tlsSettings['dest'] = (string) data_get($tlsSettings, 'dest', '');
+            $tlsSettings['server_port'] = (string) data_get($tlsSettings, 'server_port', '');
+            $tlsSettings['short_id'] = (string) data_get($tlsSettings, 'short_id', '');
+            $tlsSettings['private_key'] = (string) data_get($tlsSettings, 'private_key', '');
+            $tlsSettings['mldsa65Seed'] = (string) data_get($tlsSettings, 'mldsa65Seed', '');
+            $tlsSettings['xver'] = (string) data_get($tlsSettings, 'xver', '0');
+            return $tlsSettings;
+        }
+
+        $tlsSettings['cert_mode'] = (string) data_get($tlsSettings, 'cert_mode', 'file');
+        $tlsSettings['cert_file'] = (string) data_get($tlsSettings, 'cert_file', '');
+        $tlsSettings['key_file'] = (string) data_get($tlsSettings, 'key_file', '');
+        $tlsSettings['provider'] = (string) data_get($tlsSettings, 'provider', '');
+        $tlsSettings['dns_env'] = (string) data_get($tlsSettings, 'dns_env', '');
+        $tlsSettings['reject_unknown_sni'] = (string) data_get($tlsSettings, 'reject_unknown_sni', '0');
+
+        return $tlsSettings;
+    }
+
+    private function getBaseTlsSettingsForV2Node(string $nodeType, array $protocolSettings, int $tls): array
+    {
+        if ($nodeType === 'vless' && $tls === 2) {
+            return (array) data_get($protocolSettings, 'reality_settings', []);
+        }
+
+        return match ($nodeType) {
+            'vmess', 'vless' => (array) data_get($protocolSettings, 'tls_settings', []),
+            default => [],
+        };
+    }
+
+    private function resolveV2NodeServerName($node, string $nodeType, array $protocolSettings, int $tls, array $baseTlsSettings): string
+    {
+        $serverName = match ($nodeType) {
+            'trojan' => (string) data_get($protocolSettings, 'server_name', ''),
+            'hysteria', 'tuic', 'anytls' => (string) data_get($protocolSettings, 'tls.server_name', ''),
+            default => (string) data_get($baseTlsSettings, 'server_name', ''),
+        };
+
+        if ($nodeType === 'vless' && $tls === 2) {
+            $serverName = (string) data_get($protocolSettings, 'reality_settings.server_name', $serverName);
+        }
+
+        return $serverName ?: (string) $node->host;
     }
 }

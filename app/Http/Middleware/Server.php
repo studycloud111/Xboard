@@ -13,6 +13,9 @@ class Server
 {
     public function handle(Request $request, Closure $next, ?string $nodeType = null)
     {
+        if ($request->input('node_type') === 'v2node') {
+            $request->attributes->set('is_v2node', true);
+        }
         $this->validateRequest($request);
         $nodeType = $request->input('node_type', $nodeType);
         $normalizedNodeType = ServerModel::normalizeType($nodeType);
