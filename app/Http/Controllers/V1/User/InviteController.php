@@ -17,13 +17,27 @@ class InviteController extends Controller
 {
     public function save(Request $request)
     {
-        if (InviteCode::where('user_id', $request->user()->id)->where('status', 0)->count() >= admin_setting('invite_gen_limit', 5)) {
+        $user = $request->user();
+        if (!$user) {
+            throw new ApiException('未登录或登陆已过期', 403);
+        }
+
+        if (InviteCode::where('user_id', $user->id)->where('status', InviteCode::STATUS_UNUSED)->count() >= admin_setting('invite_gen_limit', 5)) {
             return $this->fail([400,__('The maximum number of creations has been reached')]);
         }
         $inviteCode = new InviteCode();
-        $inviteCode->user_id = $request->user()->id;
+        $inviteCode->user_id = $user->id;
         $inviteCode->code = Helper::randomChar(8);
-        return $this->success($inviteCode->save());
+
+        try {
+            return $this->success($inviteCode->save());
+        } catch (\Throwable $e) {
+            if ($e instanceof ApiException) {
+                throw $e;
+            }
+            \Log::error('Failed to create invite code', ['exception' => $e, 'user_id' => $user->id]);
+            throw new ApiException('创建邀请链接失败', 500);
+        }
     }
 
     public function details(Request $request)
