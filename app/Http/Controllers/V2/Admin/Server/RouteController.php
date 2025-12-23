@@ -10,6 +10,24 @@ use Illuminate\Support\Facades\Log;
 
 class RouteController extends Controller
 {
+    private const ROUTE_ACTIONS = [
+        'block',
+        'block_ip',
+        'block_port',
+        'protocol',
+        'dns',
+        'route',
+        'route_ip',
+        'default_out',
+    ];
+
+    private const ACTIONS_REQUIRE_VALUE = [
+        'dns',
+        'route',
+        'route_ip',
+        'default_out',
+    ];
+
     public function fetch(Request $request)
     {
         $routes = ServerRoute::get();
@@ -21,17 +39,29 @@ class RouteController extends Controller
     public function save(Request $request)
     {
         $params = $request->validate([
-            'remarks' => 'required',
-            'match' => 'required|array',
-            'action' => 'required|in:block,dns',
-            'action_value' => 'nullable'
+            'remarks' => 'required|string',
+            'match' => 'array|required_unless:action,default_out',
+            'match.*' => 'string',
+            'action' => 'required|in:' . implode(',', self::ROUTE_ACTIONS),
+            'action_value' => 'nullable|string|required_if:action,' . implode(',', self::ACTIONS_REQUIRE_VALUE),
         ], [
             'remarks.required' => '备注不能为空',
-            'match.required' => '匹配值不能为空',
+            'match.required_unless' => '匹配值不能为空',
             'action.required' => '动作类型不能为空',
-            'action.in' => '动作类型参数有误'
+            'action.in' => '动作类型参数有误',
+            'action_value.required_if' => '动作值不能为空',
         ]);
-        $params['match'] = array_filter($params['match']);
+
+        $action = $params['action'] ?? '';
+        if ($action === 'default_out') {
+            $params['match'] = [];
+        } else {
+            $params['match'] = array_values(array_filter((array) ($params['match'] ?? [])));
+        }
+
+        $params['action_value'] = isset($params['action_value']) && is_string($params['action_value']) && trim($params['action_value']) === ''
+            ? null
+            : ($params['action_value'] ?? null);
         // TODO: remove on 1.8.0
         if ($request->input('id')) {
             try {
