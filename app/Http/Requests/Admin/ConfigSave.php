@@ -49,7 +49,7 @@ class ConfigSave extends FormRequest
         'server_token' => 'nullable|min:16',
         'server_pull_interval' => 'integer',
         'server_push_interval' => 'integer',
-        'device_limit_mode' => 'integer',
+        'device_limit_mode' => 'in:0,1',
         'node_report_min_traffic' => 'integer|min:0',
         'device_online_min_traffic' => 'integer|min:0',
         // frontend
