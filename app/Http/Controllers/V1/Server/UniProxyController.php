@@ -382,7 +382,11 @@ class UniProxyController extends Controller
             $tlsSettings['short_id'] = (string) data_get($tlsSettings, 'short_id', '');
             $tlsSettings['private_key'] = (string) data_get($tlsSettings, 'private_key', '');
             $tlsSettings['mldsa65Seed'] = (string) data_get($tlsSettings, 'mldsa65Seed', '');
-            $tlsSettings['xver'] = (string) data_get($tlsSettings, 'xver', '0');
+            $xver = data_get($tlsSettings, 'xver');
+            if ($xver === null || $xver === '') {
+                $xver = '0';
+            }
+            $tlsSettings['xver'] = (string) $xver;
             return $tlsSettings;
         }
 
