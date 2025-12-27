@@ -332,8 +332,8 @@ class UniProxyController extends Controller
         }
 
         if (isset($response['base_config']) && is_array($response['base_config'])) {
-            $nodeReportMinTraffic = max(0, (int) data_get($protocolSettings, 'node_report_min_traffic', 0));
-            $deviceOnlineMinTraffic = max(0, (int) data_get($protocolSettings, 'device_online_min_traffic', 0));
+            $nodeReportMinTraffic = max(0, (int) admin_setting('node_report_min_traffic', 0));
+            $deviceOnlineMinTraffic = max(0, (int) admin_setting('device_online_min_traffic', 0));
 
             $response['base_config'] += [
                 'node_report_min_traffic' => $nodeReportMinTraffic,

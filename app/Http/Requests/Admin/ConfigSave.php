@@ -50,6 +50,8 @@ class ConfigSave extends FormRequest
         'server_pull_interval' => 'integer',
         'server_push_interval' => 'integer',
         'device_limit_mode' => 'integer',
+        'node_report_min_traffic' => 'integer|min:0',
+        'device_online_min_traffic' => 'integer|min:0',
         // frontend
         'frontend_theme' => '',
         'frontend_theme_sidebar' => 'nullable|in:dark,light',
