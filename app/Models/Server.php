@@ -126,18 +126,33 @@ class Server extends Model
             'allow_insecure' => ['type' => 'boolean', 'default' => false],
             'server_name' => ['type' => 'string', 'default' => null],
             'network' => ['type' => 'string', 'default' => null],
-            'network_settings' => ['type' => 'array', 'default' => null]
+            'network_settings' => ['type' => 'array', 'default' => null],
+            'tls_settings' => ['type' => 'array', 'default' => null],
+            'node_report_min_traffic' => ['type' => 'integer', 'default' => 0],
+            'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_VMESS => [
             'tls' => ['type' => 'integer', 'default' => 0],
             'network' => ['type' => 'string', 'default' => null],
             'rules' => ['type' => 'array', 'default' => null],
             'network_settings' => ['type' => 'array', 'default' => null],
-            'tls_settings' => ['type' => 'array', 'default' => null]
+            'tls_settings' => ['type' => 'array', 'default' => null],
+            'node_report_min_traffic' => ['type' => 'integer', 'default' => 0],
+            'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_VLESS => [
             'tls' => ['type' => 'integer', 'default' => 0],
             'tls_settings' => ['type' => 'array', 'default' => null],
+            'encryption' => ['type' => 'string', 'default' => null],
+            'encryption_settings' => [
+                'type' => 'object',
+                'fields' => [
+                    'mode' => ['type' => 'string', 'default' => null],
+                    'ticket' => ['type' => 'string', 'default' => null],
+                    'server_padding' => ['type' => 'string', 'default' => null],
+                    'private_key' => ['type' => 'string', 'default' => null],
+                ]
+            ],
             'flow' => ['type' => 'string', 'default' => null],
             'network' => ['type' => 'string', 'default' => null],
             'network_settings' => ['type' => 'array', 'default' => null],
@@ -147,18 +162,26 @@ class Server extends Model
                     'allow_insecure' => ['type' => 'boolean', 'default' => false],
                     'server_port' => ['type' => 'string', 'default' => null],
                     'server_name' => ['type' => 'string', 'default' => null],
+                    'dest' => ['type' => 'string', 'default' => null],
                     'public_key' => ['type' => 'string', 'default' => null],
                     'private_key' => ['type' => 'string', 'default' => null],
-                    'short_id' => ['type' => 'string', 'default' => null]
+                    'short_id' => ['type' => 'string', 'default' => null],
+                    'mldsa65Seed' => ['type' => 'string', 'default' => null],
+                    'xver' => ['type' => 'string', 'default' => null],
                 ]
-            ]
+            ],
+            'node_report_min_traffic' => ['type' => 'integer', 'default' => 0],
+            'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_SHADOWSOCKS => [
             'cipher' => ['type' => 'string', 'default' => null],
             'obfs' => ['type' => 'string', 'default' => null],
             'obfs_settings' => ['type' => 'array', 'default' => null],
+            'network_settings' => ['type' => 'array', 'default' => null],
             'plugin' => ['type' => 'string', 'default' => null],
-            'plugin_opts' => ['type' => 'string', 'default' => null]
+            'plugin_opts' => ['type' => 'string', 'default' => null],
+            'node_report_min_traffic' => ['type' => 'integer', 'default' => 0],
+            'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_HYSTERIA => [
             'version' => ['type' => 'integer', 'default' => 2],
@@ -184,7 +207,10 @@ class Server extends Model
                     'allow_insecure' => ['type' => 'boolean', 'default' => false]
                 ]
             ],
-            'hop_interval' => ['type' => 'integer', 'default' => null]
+            'tls_settings' => ['type' => 'array', 'default' => null],
+            'hop_interval' => ['type' => 'integer', 'default' => null],
+            'node_report_min_traffic' => ['type' => 'integer', 'default' => 0],
+            'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_TUIC => [
             'version' => ['type' => 'integer', 'default' => 5],
@@ -197,9 +223,15 @@ class Server extends Model
                     'server_name' => ['type' => 'string', 'default' => null],
                     'allow_insecure' => ['type' => 'boolean', 'default' => false]
                 ]
-            ]
+            ],
+            'tls_settings' => ['type' => 'array', 'default' => null],
+            'zero_rtt_handshake' => ['type' => 'boolean', 'default' => false],
+            'node_report_min_traffic' => ['type' => 'integer', 'default' => 0],
+            'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_ANYTLS => [
+            'network' => ['type' => 'string', 'default' => null],
+            'network_settings' => ['type' => 'array', 'default' => null],
             'padding_scheme' => [
                 'type' => 'array',
                 'default' => [
@@ -220,7 +252,10 @@ class Server extends Model
                     'server_name' => ['type' => 'string', 'default' => null],
                     'allow_insecure' => ['type' => 'boolean', 'default' => false]
                 ]
-            ]
+            ],
+            'tls_settings' => ['type' => 'array', 'default' => null],
+            'node_report_min_traffic' => ['type' => 'integer', 'default' => 0],
+            'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_SOCKS => [
             'tls' => ['type' => 'integer', 'default' => 0],

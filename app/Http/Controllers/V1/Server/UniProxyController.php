@@ -158,7 +158,7 @@ class UniProxyController extends Controller
                 'server_name' => $protocolSettings['tls']['server_name'],
                 'congestion_control' => $protocolSettings['congestion_control'],
                 'auth_timeout' => '3s',
-                'zero_rtt_handshake' => false,
+                'zero_rtt_handshake' => (bool) data_get($protocolSettings, 'zero_rtt_handshake', false),
                 'heartbeat' => "3s",
             ],
             'anytls' => [
@@ -320,10 +320,24 @@ class UniProxyController extends Controller
             }
         }
 
+        if ($protocol === 'vless') {
+            $encryption = (string) data_get($protocolSettings, 'encryption', '');
+            $response['encryption'] = $encryption;
+            $response['encryption_settings'] = [
+                'mode' => (string) data_get($protocolSettings, 'encryption_settings.mode', ''),
+                'ticket' => (string) data_get($protocolSettings, 'encryption_settings.ticket', ''),
+                'server_padding' => (string) data_get($protocolSettings, 'encryption_settings.server_padding', ''),
+                'private_key' => (string) data_get($protocolSettings, 'encryption_settings.private_key', ''),
+            ];
+        }
+
         if (isset($response['base_config']) && is_array($response['base_config'])) {
+            $nodeReportMinTraffic = max(0, (int) data_get($protocolSettings, 'node_report_min_traffic', 0));
+            $deviceOnlineMinTraffic = max(0, (int) data_get($protocolSettings, 'device_online_min_traffic', 0));
+
             $response['base_config'] += [
-                'node_report_min_traffic' => 0,
-                'device_online_min_traffic' => 0,
+                'node_report_min_traffic' => $nodeReportMinTraffic,
+                'device_online_min_traffic' => $deviceOnlineMinTraffic,
             ];
         }
 
@@ -388,10 +402,7 @@ class UniProxyController extends Controller
             return (array) data_get($protocolSettings, 'reality_settings', []);
         }
 
-        return match ($nodeType) {
-            'vmess', 'vless' => (array) data_get($protocolSettings, 'tls_settings', []),
-            default => [],
-        };
+        return (array) data_get($protocolSettings, 'tls_settings', []);
     }
 
     private function resolveV2NodeServerName($node, string $nodeType, array $protocolSettings, int $tls, array $baseTlsSettings): string
