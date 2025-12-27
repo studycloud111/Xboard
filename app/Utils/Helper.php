@@ -189,6 +189,19 @@ class Helper
         return Arr::random($fingerprints);
     }
 
+    public static function getClientFingerprint(?array $protocolSettings = null): string
+    {
+        $value = data_get($protocolSettings, 'client_fingerprint');
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed !== '') {
+                return $trimmed;
+            }
+        }
+
+        return self::getRandFingerprint();
+    }
+
     public static function encodeURIComponent($str) {
         $revert = array('%21'=>'!', '%2A'=>'*', '%27'=>"'", '%28'=>'(', '%29'=>')');
         return strtr(rawurlencode($str), $revert);

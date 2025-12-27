@@ -153,6 +153,7 @@ class Server extends Model
                     'private_key' => ['type' => 'string', 'default' => null],
                 ]
             ],
+            'client_fingerprint' => ['type' => 'string', 'default' => null],
             'flow' => ['type' => 'string', 'default' => null],
             'network' => ['type' => 'string', 'default' => null],
             'network_settings' => ['type' => 'array', 'default' => null],

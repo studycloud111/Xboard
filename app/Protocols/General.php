@@ -144,7 +144,7 @@ class General extends AbstractProtocol
                 $config['sni'] = data_get($protocol_settings, 'reality_settings.server_name');
                 $config['servername'] = data_get($protocol_settings, 'reality_settings.server_name');
                 $config['spx'] = "/";
-                $config['fp'] = Helper::getRandFingerprint();
+                $config['fp'] = Helper::getClientFingerprint($protocol_settings);
                 break;
             default:
                 break;

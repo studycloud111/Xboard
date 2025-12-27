@@ -171,7 +171,7 @@ class Shadowrocket extends AbstractProtocol
                 $config['sni'] = data_get($protocol_settings, 'reality_settings.server_name');
                 $config['pbk'] = data_get($protocol_settings, 'reality_settings.public_key');
                 $config['sid'] = data_get($protocol_settings, 'reality_settings.short_id');
-                $config['fp'] = Helper::getRandFingerprint();
+                $config['fp'] = Helper::getClientFingerprint($protocol_settings);
                 break;
             default:
                 break;

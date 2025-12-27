@@ -286,7 +286,7 @@ class Stash extends AbstractProtocol
         $array['uuid'] = $uuid;
         $array['udp'] = true;
 
-        $array['client-fingerprint'] = Helper::getRandFingerprint();
+        $array['client-fingerprint'] = Helper::getClientFingerprint($protocol_settings);
 
         switch (data_get($protocol_settings, 'tls')) {
             case 1:
