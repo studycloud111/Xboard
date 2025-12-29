@@ -1,4 +1,5 @@
 /node_modules
+.git
 /config/v2board.php
 /public/hot
 /public/storage

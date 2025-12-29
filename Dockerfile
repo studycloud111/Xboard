@@ -16,16 +16,24 @@ WORKDIR /www
 
 COPY .docker /
 
-# Add build arguments
+# By default, build from the local context (recommended for private repos).
+COPY . /www
+
+# Optional: keep the previous "clone during build" behavior when explicitly enabled.
 ARG CACHEBUST
 ARG REPO_URL
 ARG BRANCH_NAME
+ARG USE_GIT_CLONE=false
 
-RUN echo "Attempting to clone branch: ${BRANCH_NAME} from ${REPO_URL} with CACHEBUST: ${CACHEBUST}" && \
-    rm -rf ./* && \
-    rm -rf .git && \
-    git config --global --add safe.directory /www && \
-    git clone --depth 1 --branch ${BRANCH_NAME} ${REPO_URL} .
+RUN if [ "${USE_GIT_CLONE}" = "true" ]; then \
+        echo "Attempting to clone branch: ${BRANCH_NAME} from ${REPO_URL} with CACHEBUST: ${CACHEBUST}"; \
+        rm -rf ./* && \
+        rm -rf .git && \
+        git config --global --add safe.directory /www && \
+        git clone --depth 1 --branch "${BRANCH_NAME}" "${REPO_URL}" .; \
+    else \
+        echo "Using build context (USE_GIT_CLONE=false, CACHEBUST=${CACHEBUST})"; \
+    fi
 
 COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
