@@ -113,12 +113,6 @@ class Clash extends AbstractProtocol
      */
     public function buildRules($config)
     {
-        // Force the current subscription domain to be a direct rule
-        $subsDomain = request()->header('Host');
-        if ($subsDomain) {
-            array_unshift($config['rules'], "DOMAIN,{$subsDomain},DIRECT");
-        }
-
         return $config;
     }
 
